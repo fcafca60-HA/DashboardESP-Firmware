@@ -28,9 +28,36 @@ namespace dash
     constexpr uint16_t iWidth = DASH_ROTATION ? 480 : 800;
     constexpr uint16_t iHeight = DASH_ROTATION ? 800 : 480;
     constexpr uint16_t iDrawBufferLines = 20;
+    #if defined(DASH_BOARD_WAVESHARE_43)
+    constexpr const char* sBoardName = "Waveshare ESP32-S3-Touch-LCD-4.3 EXPERIMENTAL";
+#else
     constexpr const char* sBoardName = "Waveshare ESP32-S3-Touch-LCD-7 Rev1.2";
+#endif
     constexpr const char* sTouchName = "GT911";
     constexpr const char* sOrientationName = DASH_ROTATION ? "Portrait" : "Paysage";
+#elif defined(DASH_BOARD_1732S019C)
+    constexpr uint16_t iNativeWidth = 170;
+    constexpr uint16_t iNativeHeight = 320;
+    constexpr uint16_t iWidth = DASH_ROTATION ? 320 : 170;
+    constexpr uint16_t iHeight = DASH_ROTATION ? 170 : 320;
+    constexpr uint16_t iDrawBufferLines = 10;
+    constexpr const char* sBoardName = "ESP32-1732S019C EXPERIMENTAL";
+    constexpr const char* sTouchName = "GT911";
+    constexpr const char* sOrientationName = DASH_ROTATION ? "Paysage" : "Portrait";
+#elif defined(DASH_BOARD_CYD_28) || defined(DASH_BOARD_CYD_24)
+    constexpr uint16_t iNativeWidth = 240;
+    constexpr uint16_t iNativeHeight = 320;
+    constexpr uint16_t iWidth = DASH_ROTATION ? 320 : 240;
+    constexpr uint16_t iHeight = DASH_ROTATION ? 240 : 320;
+    constexpr uint16_t iDrawBufferLines = 10;
+    constexpr const char* sBoardName =
+#if defined(DASH_BOARD_CYD_28)
+        "ESP32-2432S028R";
+#else
+        "ESP32-2432S024R";
+#endif
+    constexpr const char* sTouchName = "XPT2046";
+    constexpr const char* sOrientationName = DASH_ROTATION ? "Paysage" : "Portrait";
 #else
     constexpr int iLcdMosi = 13;
     constexpr int iLcdMiso = 12;

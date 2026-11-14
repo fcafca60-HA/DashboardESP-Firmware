@@ -97,6 +97,35 @@ namespace
         return "?";
     }
 
+    // Keep command values and dynamic thresholds unrounded; only format visible text.
+    String FormatWidgetNumber(const String& sValue, JsonObjectConst tWidget)
+    {
+        JsonVariantConst tDecimals = tWidget["decimal_places"];
+        if (tDecimals.isNull() || !tDecimals.is<int>())
+        {
+            return sValue;
+        }
+        const int iPlaces = tDecimals.as<int>();
+        if (iPlaces < 0 || iPlaces > 2)
+        {
+            return sValue;
+        }
+        String sNumeric = sValue;
+        sNumeric.trim();
+        sNumeric.replace(',', '.');
+        if (sNumeric.isEmpty())
+        {
+            return sValue;
+        }
+        char* pEnd = nullptr;
+        const float fValue = strtof(sNumeric.c_str(), &pEnd);
+        if (pEnd == sNumeric.c_str() || *pEnd != '\0' || !isfinite(fValue))
+        {
+            return sValue;
+        }
+        return String(fValue, iPlaces);
+    }
+
     String FormatPower(const String& sValue, const String& sUnit)
     {
         return sValue == "--" ? "-- " + sUnit : sValue + " " + sUnit;
@@ -478,8 +507,115 @@ void DashboardRuntime::begin()
     }
 }
 
+void DashboardRuntime::handleSerial()
+{
+    // Read only full CR/LF-terminated commands; never block LVGL or Wi-Fi.
+    static String sLine;
+    static bool bOverflow = false;
+    int iBudget = 96;
+    while (Serial.available() > 0 && iBudget-- > 0)
+    {
+        const char cValue = static_cast<char>(Serial.read());
+        if (cValue == '\r' || cValue == '\n')
+        {
+            if (bOverflow)
+            {
+                Serial.println("[SERIAL] ERROR: line_too_long");
+            }
+            else if (!sLine.isEmpty())
+            {
+                processSerialCommand(sLine);
+            }
+            sLine = "";
+            bOverflow = false;
+            continue;
+        }
+        if (static_cast<uint8_t>(cValue) < 32)
+        {
+            continue;
+        }
+        if (sLine.length() >= 191)
+        {
+            bOverflow = true;
+        }
+        else if (!bOverflow)
+        {
+            sLine += cValue;
+        }
+    }
+}
+
+void DashboardRuntime::processSerialCommand(String sCommand)
+{
+    sCommand.trim();
+    if (sCommand.equalsIgnoreCase("info"))
+    {
+        Serial.printf("[INFO] DashboardESP V%s / %s / %ux%u / LVGL %d.%d\n",
+                      DASH_VERSION, dash::sBoardName, dash::iWidth, dash::iHeight,
+                      LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR);
+        Serial.printf("[INFO] WiFi=%s IP=%s SSID=%s\n",
+                      WiFi.status() == WL_CONNECTED ? "CONNECTED" : "OFFLINE",
+                      WiFi.localIP().toString().c_str(), sWifiSsid.c_str());
+        Serial.printf("[INFO] API_PORT=%u API_KEY=%s\n", iApiPort, sAdminToken.c_str());
+        Serial.printf("[INFO] HEAP_FREE=%lu PROJECT=%s\n",
+                      static_cast<unsigned long>(ESP.getFreeHeap()), bProjectReady ? "LOADED" : "NONE");
+        return;
+    }
+    if (sCommand.equalsIgnoreCase("help") || sCommand == "?")
+    {
+        Serial.println("[SERIAL] info<CR> | wifi <ssid> <pwd><CR> | help<CR>");
+        Serial.println("[SERIAL] Use quoted SSID/password if they contain spaces.");
+        return;
+    }
+    if (sCommand.substring(0, 5).equalsIgnoreCase("wifi "))
+    {
+        String sArgs = sCommand.substring(5);
+        sArgs.trim();
+        String sParts[2];
+        size_t iPosition = 0;
+        for (int iField = 0; iField < 2; ++iField)
+        {
+            while (iPosition < sArgs.length() && sArgs[iPosition] == ' ') ++iPosition;
+            if (iPosition >= sArgs.length()) break;
+            if (sArgs[iPosition] == '"')
+            {
+                ++iPosition;
+                while (iPosition < sArgs.length() && sArgs[iPosition] != '"')
+                {
+                    sParts[iField] += sArgs[iPosition++];
+                }
+                if (iPosition < sArgs.length()) ++iPosition;
+            }
+            else
+            {
+                while (iPosition < sArgs.length() && sArgs[iPosition] != ' ')
+                {
+                    sParts[iField] += sArgs[iPosition++];
+                }
+            }
+        }
+        while (iPosition < sArgs.length() && sArgs[iPosition] == ' ') ++iPosition;
+        if (iPosition != sArgs.length() || sParts[0].isEmpty() ||
+            sParts[0].length() > 32 || sParts[1].length() > 63 ||
+            (!sParts[1].isEmpty() && sParts[1].length() < 8))
+        {
+            Serial.println("[WIFI] ERROR syntax: wifi <ssid> <pwd> (password >=8 or quoted empty)");
+            return;
+        }
+        oPreferences.putString("ssid", sParts[0]);
+        oPreferences.putString("password", sParts[1]);
+        Serial.printf("[WIFI] SAVED SSID=%s; restarting to connect...\n", sParts[0].c_str());
+        Serial.flush();
+        delay(200);
+        ESP.restart();
+        return;
+    }
+    Serial.println("[SERIAL] ERROR unknown_command; type help");
+}
+
 void DashboardRuntime::loop()
 {
+    handleSerial();
     if (!bInfoVisible && !sPendingPage.isEmpty())
     {
         const String sDestination = sPendingPage;
@@ -945,22 +1081,39 @@ void DashboardRuntime::resolveThreshold(JsonObjectConst tWidget, const String& s
 
 const lv_font_t* DashboardRuntime::selectFont(int iSize)
 {
-    if (iSize <= 12)
+    // Match the 8..48px editor range with the closest embedded LVGL face.
+    // Font faces are in flash (not in the 48KB LVGL heap).
+    static const int aiSizes[] = {8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48};
+    static const lv_font_t* apFonts[] = {
+        &lv_font_montserrat_8, &lv_font_montserrat_10,
+        &lv_font_montserrat_12, &lv_font_montserrat_14,
+        &lv_font_montserrat_16, &lv_font_montserrat_18,
+        &lv_font_montserrat_20, &lv_font_montserrat_22,
+        &lv_font_montserrat_24, &lv_font_montserrat_26,
+        &lv_font_montserrat_28, &lv_font_montserrat_30,
+        &lv_font_montserrat_32, &lv_font_montserrat_34,
+        &lv_font_montserrat_36, &lv_font_montserrat_38,
+        &lv_font_montserrat_40, &lv_font_montserrat_42,
+        &lv_font_montserrat_44, &lv_font_montserrat_46,
+        &lv_font_montserrat_48
+    };
+    iSize = constrain(iSize, 8, 48);
+    int iBest = 0;
+    for (int iIndex = 1; iIndex < 21; ++iIndex)
     {
-        return &lv_font_montserrat_12;
+        if (abs(aiSizes[iIndex] - iSize) < abs(aiSizes[iBest] - iSize))
+        {
+            iBest = iIndex;
+        }
     }
+    return apFonts[iBest];
+}
 
-    if (iSize <= 16)
-    {
-        return &lv_font_montserrat_16;
-    }
-
-    if (iSize <= 20)
-    {
-        return &lv_font_montserrat_20;
-    }
-
-    return &lv_font_montserrat_24;
+int DashboardRuntime::scaledFont(JsonObjectConst tWidget, int iDefault) const
+{
+    const int iBase = constrain(static_cast<int>(tWidget["fontSize"] | 16), 8, 48);
+    const int iComputed = static_cast<int>(roundf(iDefault * (iBase / 16.0f) * fCanvasScale));
+    return constrain(iComputed, 8, 48);
 }
 
 void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
@@ -984,7 +1137,7 @@ void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
     // LVGL defers its coordinate/layout update. The child positions below must
     // never be calculated using stale coordinates from a newly created object.
     lv_obj_update_layout(tEntry.pObject);
-    lv_obj_set_style_radius(tEntry.pObject, iRadius, 0);
+    lv_obj_set_style_radius(tEntry.pObject, max(0, static_cast<int>(roundf(iRadius * fCanvasScale))), 0);
     lv_obj_set_style_bg_opa(tEntry.pObject, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(tEntry.pObject, lv_color_hex(ulFill), 0);
     const String sVisual = tWidget["visual_style"] | "premium";
@@ -1031,7 +1184,7 @@ void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
     {
         lv_obj_set_width(tEntry.pLabel, lv_pct(100));
         lv_obj_set_style_text_color(tEntry.pLabel, lv_color_hex(ulText), 0);
-        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(iFont), 0);
+        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(max(8, static_cast<int>(roundf(iFont * fCanvasScale)))), 0);
         const String sAlign = tWidget["align"] | "center";
         const lv_text_align_t tAlign = sAlign == "left" ? LV_TEXT_ALIGN_LEFT :
                                        (sAlign == "right" ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_CENTER);
@@ -1210,7 +1363,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
             lv_obj_remove_flag(pCell, LV_OBJ_FLAG_SCROLLABLE);
             tEntry.apMetricLabels[iIndex] = lv_label_create(pCell);
             lv_obj_set_width(tEntry.apMetricLabels[iIndex], lv_pct(100));
-            lv_obj_set_style_text_font(tEntry.apMetricLabels[iIndex], &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_font(tEntry.apMetricLabels[iIndex], selectFont(scaledFont(tWidget, 12)), 0);
             lv_obj_set_style_text_color(tEntry.apMetricLabels[iIndex], lv_color_hex(0xECF4FF), 0);
             lv_obj_set_style_text_align(tEntry.apMetricLabels[iIndex], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(tEntry.apMetricLabels[iIndex]);
@@ -1223,7 +1376,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
         tEntry.pAux = lv_label_create(tEntry.pObject);
         lv_obj_set_width(tEntry.pAux, lv_pct(100));
         lv_obj_set_style_text_color(tEntry.pAux, lv_color_hex(ulForeground), 0);
-        lv_obj_set_style_text_font(tEntry.pAux, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(tEntry.pAux, selectFont(scaledFont(tWidget, 12)), 0);
         lv_obj_set_style_text_align(tEntry.pAux, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(tEntry.pAux, LV_ALIGN_BOTTOM_MID, 0, -2);
     }
@@ -1239,18 +1392,18 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
         lv_obj_set_size(tEntry.pLabel, max(30, iWidth - iIconWidth - 11), max(20, iHeight / 2));
         lv_obj_set_style_text_align(tEntry.pLabel, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_style_text_color(tEntry.pLabel, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(iHeight >= 80 ? 24 : 20), 0);
+        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(scaledFont(tWidget, iHeight >= 80 ? 24 : 20)), 0);
         tEntry.pWeatherIcon = lv_label_create(tEntry.pObject);
         lv_obj_set_pos(tEntry.pWeatherIcon, 4, max(1, (iHeight - 30) / 2));
         lv_obj_set_width(tEntry.pWeatherIcon, iIconWidth);
         lv_obj_set_style_text_align(tEntry.pWeatherIcon, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_font(tEntry.pWeatherIcon, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(tEntry.pWeatherIcon, selectFont(scaledFont(tWidget, 24)), 0);
         lv_obj_set_style_text_color(tEntry.pWeatherIcon, lv_color_hex(0xFDE68A), 0);
         tEntry.pWeatherInfo = lv_label_create(tEntry.pObject);
         lv_obj_set_pos(tEntry.pWeatherInfo, iIconWidth + 5, iHeight / 2);
         lv_obj_set_size(tEntry.pWeatherInfo, max(30, iWidth - iIconWidth - 11), max(14, iHeight / 2 - 4));
         lv_obj_set_style_text_align(tEntry.pWeatherInfo, LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_set_style_text_font(tEntry.pWeatherInfo, selectFont(iHeight >= 75 ? 16 : 12), 0);
+        lv_obj_set_style_text_font(tEntry.pWeatherInfo, selectFont(scaledFont(tWidget, iHeight >= 75 ? 16 : 12)), 0);
         lv_obj_set_style_text_color(tEntry.pWeatherInfo, lv_color_hex(0xFDE68A), 0);
         lv_label_set_long_mode(tEntry.pWeatherInfo, LV_LABEL_LONG_CLIP);
     }
@@ -1282,7 +1435,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
         lv_obj_set_style_pad_column(tEntry.pObject, 0, 0);
         lv_obj_set_style_text_color(tEntry.pObject, lv_color_hex(0x4ADE80), 0);
         lv_obj_set_size(tEntry.pLabel, iWidth - 2 * iPad, iTitleHeight);
-        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(iWidth < 190 ? 12 : 16), 0);
+        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(scaledFont(tWidget, iWidth < 190 ? 12 : 16)), 0);
         lv_obj_set_style_text_align(tEntry.pLabel, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(tEntry.pLabel, LV_ALIGN_TOP_LEFT, iPad, 2);
 
@@ -1303,7 +1456,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
             lv_obj_set_width(tEntry.apMetricLabels[iIndex], iCellWidth - 4);
             lv_obj_set_style_text_align(tEntry.apMetricLabels[iIndex], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_color(tEntry.apMetricLabels[iIndex], lv_color_hex(0x8AFFB8), 0);
-            lv_obj_set_style_text_font(tEntry.apMetricLabels[iIndex], selectFont(iSmallFont), 0);
+            lv_obj_set_style_text_font(tEntry.apMetricLabels[iIndex], selectFont(scaledFont(tWidget, iSmallFont)), 0);
             lv_label_set_long_mode(tEntry.apMetricLabels[iIndex], LV_LABEL_LONG_CLIP);
             lv_obj_center(tEntry.apMetricLabels[iIndex]);
         }
@@ -1312,7 +1465,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
         lv_obj_set_pos(tEntry.pAux, iPad, iFooterTop + 4);
         lv_obj_set_size(tEntry.pAux, max(24, iWidth - 2 * iPad - (bShowControls ? 2 * (iButtonSize + 3) : 0)), iFooterHeight - 2);
         lv_obj_set_style_text_color(tEntry.pAux, lv_color_hex(0xCBD5E1), 0);
-        lv_obj_set_style_text_font(tEntry.pAux, selectFont(iSmallFont), 0);
+        lv_obj_set_style_text_font(tEntry.pAux, selectFont(scaledFont(tWidget, iSmallFont)), 0);
         lv_label_set_long_mode(tEntry.pAux, LV_LABEL_LONG_CLIP);
 
         JsonObjectConst tBindings = tWidget["thermostat_bindings"].as<JsonObjectConst>();
@@ -1332,7 +1485,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
                 lv_obj_set_style_bg_color(pControl, lv_color_hex(0x24549E), 0);
                 lv_obj_t* pText = lv_label_create(pControl);
                 lv_label_set_text(pText, asLabels[iIndex]);
-                lv_obj_set_style_text_font(pText, &lv_font_montserrat_16, 0);
+                lv_obj_set_style_text_font(pText, selectFont(scaledFont(tWidget, 16)), 0);
                 lv_obj_center(pText);
                 if (tEntry.iActionId > 0)
                 {
@@ -1363,7 +1516,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
                 lv_obj_set_style_bg_color(pMode, lv_color_hex(0x23508B), 0);
                 lv_obj_t* pCaption = lv_label_create(pMode);
                 lv_label_set_text(pCaption, asLabels[iIndex]);
-                lv_obj_set_style_text_font(pCaption, &lv_font_montserrat_12, 0);
+                lv_obj_set_style_text_font(pCaption, selectFont(scaledFont(tWidget, 12)), 0);
                 lv_obj_center(pCaption);
                 if (readCommand(tBindings[asKeys[iIndex]]) > 0)
                 {
@@ -1519,7 +1672,7 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
     else if (tEntry.sType == "value")
     {
         const String sValue = getValue(tEntry.iInfoId, sText);
-        sText = sValue;
+        sText = FormatWidgetNumber(sValue, tWidget);
         if ((tWidget["show_unit"] | false))
         {
             const String sUnit = String(tWidget["unit"] | "");
@@ -1560,8 +1713,8 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
         sMode.replace("û", "u");
         const String sDegree = String("\xC2\xB0") + "C";
         SetText(tEntry.pLabel, String(tWidget["text"] | "Thermostat"));
-        SetText(tEntry.apMetricLabels[0], "Ambiante\n" + sTemperature + " " + sDegree);
-        SetText(tEntry.apMetricLabels[1], "Consigne\n" + sSetpoint + " " + sDegree);
+        SetText(tEntry.apMetricLabels[0], "Ambiante\n" + FormatWidgetNumber(sTemperature, tWidget) + " " + sDegree);
+        SetText(tEntry.apMetricLabels[1], "Consigne\n" + FormatWidgetNumber(sSetpoint, tWidget) + " " + sDegree);
         SetText(tEntry.pAux, String(bHeating ? "Chauffe " : "Mode ") + sMode);
         lv_obj_set_style_text_color(tEntry.pAux, lv_color_hex(bHeating ? 0xFB923C : 0xCBD5E1), 0);
         String sModeLower = sMode;
@@ -1592,13 +1745,13 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
             // Use ASCII fallback when a glyph is absent from LVGL Montserrat.
             SetText(tEntry.pWeatherIcon, sLower.indexOf("pluie") >= 0 ? "///" :
                          (sLower.indexOf("nuage") >= 0 ? "(o)" : "*"));
-            SetText(tEntry.pWeatherInfo, sCondition + "  |  " + sHumidity + " %");
-            SetText(tEntry.pLabel, sTemperature + " " + String("\xC2\xB0") + "C");
+            SetText(tEntry.pWeatherInfo, sCondition + "  |  " + FormatWidgetNumber(sHumidity, tWidget) + " %");
+            SetText(tEntry.pLabel, FormatWidgetNumber(sTemperature, tWidget) + " " + String("\xC2\xB0") + "C");
             resolveThreshold(tWidget, sTemperature, ulText, ulFill);
             lv_obj_set_style_bg_color(tEntry.pObject, lv_color_hex(ulFill), 0);
             return;
         }
-        sText = sTemperature + " C\n" + sCondition + " | " + sHumidity + " %";
+        sText = FormatWidgetNumber(sTemperature, tWidget) + " C\n" + sCondition + " | " + FormatWidgetNumber(sHumidity, tWidget) + " %";
         resolveThreshold(tWidget, sTemperature, ulText, ulFill);
     }
     else if (tEntry.sType == "symbol")
@@ -1634,26 +1787,26 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
         for (int iIndex = 0; iIndex < 4; iIndex++)
         {
             const String sMetric = getBinding(tBindings, asKeys[iIndex], asFallbacks[iIndex]);
-            SetText(tEntry.apMetricLabels[iIndex], String(asLabels[iIndex]) + "\n" + FormatPower(sMetric, "W"));
+            SetText(tEntry.apMetricLabels[iIndex], String(asLabels[iIndex]) + "\n" + FormatPower(FormatWidgetNumber(sMetric, tWidget), "W"));
         }
     }
     else if (tEntry.sType == "energy_meter")
     {
         JsonObjectConst tBindings = tWidget["energy_bindings"].as<JsonObjectConst>();
         const String sPower = getBinding(tBindings, "power", "1250");
-        sText += "\n" + FormatPower(sPower, "W");
+        sText += "\n" + FormatPower(FormatWidgetNumber(sPower, tWidget), "W");
 
         if (String(tWidget["energy_mode"] | "mono") == "tri")
         {
-            sText += "\nL1 " + getBinding(tBindings, "phase1", "420");
-            sText += " L2 " + getBinding(tBindings, "phase2", "410");
-            sText += " L3 " + getBinding(tBindings, "phase3", "420");
+            sText += "\nL1 " + FormatWidgetNumber(getBinding(tBindings, "phase1", "420"), tWidget);
+            sText += " L2 " + FormatWidgetNumber(getBinding(tBindings, "phase2", "410"), tWidget);
+            sText += " L3 " + FormatWidgetNumber(getBinding(tBindings, "phase3", "420"), tWidget);
         }
         else
         {
-            sText += "\n" + getBinding(tBindings, "voltage", "230") + " V";
-            sText += "  " + getBinding(tBindings, "current", "5.4") + " A";
-            sText += "\n" + getBinding(tBindings, "energy", "12.6") + " kWh";
+            sText += "\n" + FormatWidgetNumber(getBinding(tBindings, "voltage", "230"), tWidget) + " V";
+            sText += "  " + FormatWidgetNumber(getBinding(tBindings, "current", "5.4"), tWidget) + " A";
+            sText += "\n" + FormatWidgetNumber(getBinding(tBindings, "energy", "12.6"), tWidget) + " kWh";
         }
 
         float fPower = 0;

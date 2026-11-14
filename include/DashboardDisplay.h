@@ -3,6 +3,10 @@
 #if defined(DASH_DISPLAY_TFT_ESPI)
 #include <TFT_eSPI.h>
 #include <Wire.h>
+#if defined(DASH_BOARD_CYD_28) || defined(DASH_BOARD_CYD_24)
+#include <SPI.h>
+#include <XPT2046_Touchscreen.h>
+#endif
 #elif !defined(DASH_BOARD_WAVESHARE_7)
 #include <LovyanGFX.hpp>
 #endif
@@ -32,6 +36,10 @@ public:
 
 private:
     bool bTouchReady = false;
+#if defined(DASH_BOARD_CYD_28) || defined(DASH_BOARD_CYD_24)
+    SPIClass oTouchBus = SPIClass(HSPI);
+    XPT2046_Touchscreen oTouch = XPT2046_Touchscreen(33);
+#endif
 };
 #else
 class DashboardDisplay : public lgfx::LGFX_Device

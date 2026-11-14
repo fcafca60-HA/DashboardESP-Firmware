@@ -1,0 +1,12 @@
+{
+  "board": "Waveshare ESP32-S3-Touch-LCD-4.3",
+  "mcu": "ESP32-S3",
+  "display": "ST7262 RGB",
+  "resolution": [
+    800,
+    480
+  ],
+  "touch": "GT911 through CH422G",
+  "state": "experimental PlatformIO profile; untested 4.3 timing",
+  "warning": "Profil base sur le pilote 7 pouces, les timings RGB, GPIO expander et GT911 doivent etre valides sur 4.3"
+}

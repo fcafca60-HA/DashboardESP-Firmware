@@ -136,6 +136,9 @@ private:
     static bool numericValue(const String& sValue, float& fValue);
     void resolveThreshold(JsonObjectConst tWidget, const String& sValue, uint32_t& ulText, uint32_t& ulBackground) const;
     static const lv_font_t* selectFont(int iSize);
+    int scaledFont(JsonObjectConst tWidget, int iDefault) const;
+    void handleSerial();
+    void processSerialCommand(String sCommand);
     static void widgetEvent(lv_event_t* pEvent);
     static void thermostatEvent(lv_event_t* pEvent);
     static void thermostatModeEvent(lv_event_t* pEvent);

@@ -1,3 +1,41 @@
+# DashboardESP Firmware V0.3.23 — Beta
+
+Firmware ESP32 pour tableaux de bord tactiles configures par **DashboardESP Studio (Jeedom)**.
+
+**Statut : beta.** Les profils ESP32-3248S035C et Waveshare ESP32-S3 Touch LCD 7 sont les configurations historiquement testees. Les nouveaux profils ESP32-2432S028R, ESP32-2432S024R, ESP32-1732S019C et Waveshare 4.3 pouces sont **experimentaux** : leur compilation et leur fonctionnement sur carte ne sont pas garantis. Le sous-projet ESP32-P4-WIFI6-Touch-LCD-7B est une demo ESP-IDF, **sans synchronisation JSON Jeedom complete**.
+
+## Installation
+
+1. Installer VS Code et PlatformIO.
+2. Ouvrir la **racine du depot** (celle qui contient `platformio.ini`).
+3. Choisir l'environnement correspondant exactement au modele et a la variante de l'ecran dans `platformio.ini`.
+4. Compiler avant de televerser. **Ne jamais envoyer un firmware ESP32-S3 vers un ESP32 classique, ou inversement.**
+5. Sauvegarder la configuration et le projet JSON avant un changement de partitions (notamment profils ESP32 4 Mo).
+
+## Nouveautes depuis v0.3.19-beta
+
+- Meilleure restitution des tailles de caracteres `fontSize` de 8 a 48 px, dans les limites de LVGL et des polices disponibles.
+- Format d'affichage `decimal_places` (0, 1 ou 2 decimales), issu du plugin Jeedom.
+- Commandes serie a **115200 bauds** : `info` (affiche la cle API) et `wifi <ssid> <pwd>` (configuration reseau ; guillemets si espaces). **Ne jamais diffuser le retour de `info`**, car il contient une cle d'acces.
+- Partition applicative 3 Mio pour certains ESP32 classiques a flash 4 Mio (sans partitions OTA), afin d'accueillir les polices supplementaires.
+- Profils materiels experimentaux : Waveshare 4.3, ESP32-2432S028R, ESP32-2432S024R, ESP32-1732S019C ; projet ESP-IDF P4 conserve.
+- Correction de la reference de la bibliotheque `XPT2046_Touchscreen`.
+
+## Code et licences
+
+**Sources consultables, usage personnel non commercial uniquement** suivant les conditions de [`LICENSE.txt`](LICENSE.txt). Ce depot ne doit pas etre presente comme « open source » au sens des licences OSI. Les bibliotheques tierces conservent leurs propres licences. La licence personnalisee devrait faire l'objet d'une revue juridique avant distribution.
+
+## Documentation
+
+- [`docs/PARITE_JEEDOM_0320.md`](docs/PARITE_JEEDOM_0320.md) : correspondance rendu Jeedom / firmware.
+- [`docs/CARTES_0320.md`](docs/CARTES_0320.md) : variantes et limites materielles.
+- [`docs/SERIAL_0320.md`](docs/SERIAL_0320.md) : commandes serie.
+- [`platforms/esp32-p4-wifi6-touch-lcd-7b/README.md`](platforms/esp32-p4-wifi6-touch-lcd-7b/README.md) : statut ESP-IDF du P4.
+
+---
+
+## Historique et notes techniques precedentes
+
 # DashboardESP Firmware — V0.3.19 (préparation GitHub)
 
 **Source consultable — usage personnel non commercial uniquement.** Lire [LICENSE.txt](LICENSE.txt) avant utilisation. Pas de redistribution ou de versions dérivées sans autorisation écrite.
@@ -153,3 +191,47 @@ Pour compiler et televerser :
 `pio run -e dashboardesp_035c_portrait_touch_test -t upload --upload-port COM5`
 
 Puis `pio device monitor -b 115200`. Si le pointeur suit le doigt, revenir au profil complet `dashboardesp_035c_portrait`.
+
+
+## V0.3.21 — Affichage arrondi selon les tuiles Jeedom
+
+- Prise en charge du champ optionnel `decimal_places` (0, 1, 2) dans chaque widget.
+- Concerne Valeur, Meteo, Thermostat, Energie maison et Compteur energie.
+- Les valeurs INFO reelles ainsi que les seuils et actions restent non arrondis.
+- Absence du champ : comportement historique inchangé.
+- Compatible avec DashboardESP Studio V0.3.14 File.
+
+
+## V0.3.23 — Correction de la taille du firmware ESP32 classique (4 Mo flash)
+
+Les polices 8–48 px de la V0.3.21 font passer l'image de l'application
+au-dessus de la limite de 1 310 720 octets de `default.csv`.
+Les profils ESP32 classiques utilisent désormais `partitions_4mb_large_app.csv` :
+une application de 3 Mio, une partition LittleFS de 960 Kio, **sans OTA**.
+Les environnements Waveshare ESP32-S3 conservent leurs fichiers de partitions.
+
+**Avant de flasher** : sauvegarder/exporter le JSON depuis Jeedom et conserver
+la clé API ainsi que le SSID/mot de passe. Le changement de table de partitions
+peut rendre le contenu LittleFS actuel inaccessible et déclencher son reformatage
+(`LittleFS.begin(true)`). La NVS devrait rester à la même adresse, mais une
+réinitialisation reste possible et ne doit pas être exclue. Le projet peut être
+renvoyé depuis Jeedom après installation. Vérifier que la puce dispose bien
+de 4 Mio de flash ou davantage.
+
+Compiler dans VS Code / PlatformIO :
+
+```powershell
+pio run -e dashboardesp_035c_landscape
+```
+
+La version V0.3.21 des sources graphiques et des commandes est préservée.
+La V0.3.23 modifie uniquement la table de partitions des ESP32 classiques,
+le numéro de version et la documentation.
+
+## Correctif V0.3.23
+
+- Le registre PlatformIO ne publie pas `paulstoffregen/XPT2046_Touchscreen@^1.4` comme version stable. Les profils resistifs utilisent la source GitHub officielle `#v1.4`. Une connexion Internet est necessaire au premier build.
+- Profil `dashboardesp_1732s019c_portrait_EXPERIMENTAL` ajoute: ESP32-S3 / ST7789 170x320 / GT911. Brochage base sur documentation publique, **non valide sur la carte reelle**. Ne pas utiliser sur 1732S019N.
+- L'ESP32-P4 reste un projet ESP-IDF distinct, non compilable via ce `platformio.ini`.
+
+Compiler: `pio run -e dashboardesp_1732s019c_portrait_EXPERIMENTAL`.

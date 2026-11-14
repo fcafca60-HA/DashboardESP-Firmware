@@ -1,0 +1,12 @@
+{
+  "board": "ESP32-2432S028R",
+  "mcu": "ESP32",
+  "display": "ILI9341 SPI, attention aux revisions ST7789",
+  "resolution": [
+    240,
+    320
+  ],
+  "touch": "XPT2046 on second SPI bus",
+  "state": "experimental PlatformIO profiles in main platformio.ini",
+  "warning": "Calibrer le tactile sur la carte reelle avant activation des commandes Jeedom; variante TFT ST7789 non prise en charge"
+}

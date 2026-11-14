@@ -1,0 +1,12 @@
+{
+  "board": "ESP32-2432S024",
+  "mcu": "ESP32",
+  "display": "ILI9341 240x320, variante ST7789 a verifier",
+  "resolution": [
+    240,
+    320
+  ],
+  "touch": "XPT2046 (R), CST820/CST816 (C)",
+  "state": "R experimental PlatformIO profile; C not ported",
+  "warning": "Le profil *_EXPERIMENTAL concerne uniquement la version resistive ILI9341; identifier R/C et LCD avant flash"
+}

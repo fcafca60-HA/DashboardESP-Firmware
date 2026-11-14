@@ -1,3 +1,30 @@
+## V0.3.23
+- Correctif lib_deps XPT2046: GitHub officiel #v1.4.
+- Ajout profil experimental ESP32-1732S019C 170x320 ST7789/GT911.
+- Aucun changement des profils ESP32-3248S035C ou Waveshare deja valides.
+
+## V0.3.22 File PC — Flash ESP32 classique (4 Mo)
+
+- Correction de l'erreur PlatformIO `program size 2070441 > 1310720` par
+  `partitions_4mb_large_app.csv` (application 3 Mio + LittleFS 960 Kio).
+- Aucun changement aux pilotes TFT_eSPI/GT911, LVGL, JSON ou commandes série.
+- Les partitions spécifiques Waveshare ESP32-S3 restent inchangées.
+- Changement de partitions : prévoir sauvegarde JSON puis renvoi depuis Jeedom.
+
+## V0.3.21 File PC — Precision des mesures
+
+- Interprete `decimal_places` (0, 1, 2) pour Valeur, Meteo, Thermostat et Energie.
+- Valeurs sources et seuils conserves sans arrondi; retrocompatibilite en absence du champ.
+- Profils LCD, tactile, Wi-Fi et commandes serie inchanges.
+
+## V0.3.20 — File PC
+- Ajout des commandes serie `info`, `wifi` et `help` a 115200 bauds au runtime ESP32 Arduino.
+- Selection de police 8..48px et ajustement des polices des sous-elements Meteo, Energie, Thermostat et Symbole ; rayon et police principale mis a l echelle du canevas.
+- Profils experimentaux ESP32-2432S028R et 2432S024R, Waveshare 4.3 ; inventaire ESP32-1732S019 et dossier P4 ESP-IDF conserve.
+- Audit des proprietes JSON dans docs/PARITE_JEEDOM_0320.md.
+- Aucun changement de protocole HTTP/API ni de la structure du JSON.
+- Compilation PlatformIO et validation materielle non realisees dans cet environnement.
+
 ## 0.3.19 - Préparation de publication (14/11/2026)
 
 - Ajout d'un **profil séparé ESP32-P4-WIFI6-Touch-LCD-7B** ESP-IDF 5.5.5, BSP Waveshare 3.0.1 et LVGL 9.5.0.

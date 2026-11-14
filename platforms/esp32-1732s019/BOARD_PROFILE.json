@@ -1,0 +1,27 @@
+{
+  "board": "ESP32-1732S019 (C/N)",
+  "mcu": "ESP32-S3",
+  "display": "ST7789 SPI",
+  "resolution": [
+    170,
+    320
+  ],
+  "touch": "GT911 (C), none (N)",
+  "state": "Experimental PlatformIO environment added (not tested on hardware)",
+  "warning": "S019C et S019N ne sont pas interchangeables; le panneau 170x320 comporte un offset ST7789 et le portage complet necessite les broches confirmes du constructeur",
+  "environment": "dashboardesp_1732s019c_portrait_EXPERIMENTAL",
+  "lcd_gpio": {
+    "mosi": 13,
+    "sclk": 12,
+    "cs": 10,
+    "dc": 11,
+    "rst": 1,
+    "backlight": 14
+  },
+  "touch_gpio": {
+    "sda": 9,
+    "scl": 46,
+    "int": 8,
+    "rst": 3
+  }
+}

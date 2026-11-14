@@ -21,11 +21,23 @@ namespace
 {
     constexpr uint8_t iGt911AddressA = 0x5D;
     constexpr uint8_t iGt911AddressB = 0x14;
+#if defined(DASH_BOARD_CYD_28) || defined(DASH_BOARD_CYD_24)
+    constexpr int iBacklightPin = 21;
+#elif defined(DASH_BOARD_1732S019C)
+    constexpr int iBacklightPin = 14;
+#else
     constexpr int iBacklightPin = 27;
+#endif
     constexpr int iBacklightChannel = 7;
+#if defined(DASH_BOARD_1732S019C)
+    constexpr int iTouchSda = 9;
+    constexpr int iTouchScl = 46;
+    constexpr int iTouchRst = 3;
+#else
     constexpr int iTouchSda = 33;
     constexpr int iTouchScl = 32;
     constexpr int iTouchRst = 25;
+#endif
     uint8_t iGt911Address = iGt911AddressA;
     bool ReadRegister16(uint16_t iRegister, uint8_t* pData, size_t iLength)
     {
@@ -69,13 +81,58 @@ void DashboardDisplay::setBrightness(uint8_t iLevel)
     ledcWrite(iBacklightChannel, iLevel);
 }
 
+#if defined(DASH_BOARD_CYD_28) || defined(DASH_BOARD_CYD_24)
+void DashboardDisplay::initializeTouch()
+{
+    // CYD uses its OWN touch SPI bus: SCLK=25, MISO=39, MOSI=32, CS=33.
+    // Do not configure Wire/GT911 (used by the 035C only).
+    oTouchBus.begin(25, 39, 32, 33);
+    bTouchReady = oTouch.begin(oTouchBus);
+    oTouch.setRotation(0);
+    Serial.printf("[TOUCH] CYD XPT2046 on HSPI, ready=%d (calibration provisional)\n", bTouchReady);
+}
+
+bool DashboardDisplay::isTouchReady() const
+{
+    return bTouchReady;
+}
+
+bool DashboardDisplay::getTouchRaw(uint16_t* pX, uint16_t* pY, uint8_t* pStatus, uint8_t* pData)
+{
+    if (pX == nullptr || pY == nullptr || !bTouchReady || !oTouch.touched()) return false;
+    TS_Point tPoint = oTouch.getPoint();
+    *pX = static_cast<uint16_t>(constrain(tPoint.x, 0, 4095));
+    *pY = static_cast<uint16_t>(constrain(tPoint.y, 0, 4095));
+    if (pStatus != nullptr) *pStatus = 0x81;
+    if (pData != nullptr) memset(pData, 0, 8);
+    return true;
+}
+
+bool DashboardDisplay::getTouch(uint16_t* pX, uint16_t* pY)
+{
+    uint16_t iRawX = 0, iRawY = 0;
+    if (!getTouchRaw(&iRawX, &iRawY, nullptr, nullptr)) return false;
+    // A starting calibration only. The physical touch orientation must be tested
+    // on each 028/024 revision before use with actionable Jeedom commands.
+    int iX = map(iRawX, 200, 3900, 0, 239);
+    int iY = map(iRawY, 200, 3900, 0, 319);
+#if DASH_ROTATION == 1
+    const int iOriginalX = iX;
+    iX = iY;
+    iY = 239 - iOriginalX;
+#endif
+    *pX = static_cast<uint16_t>(constrain(iX, 0, static_cast<int>(dash::iWidth) - 1));
+    *pY = static_cast<uint16_t>(constrain(iY, 0, static_cast<int>(dash::iHeight) - 1));
+    return true;
+}
+#else
 void DashboardDisplay::initializeTouch()
 {
     bTouchReady = false;
     Wire.begin(iTouchSda, iTouchScl, 100000);
     Wire.setTimeOut(50);
 
-    // ESP32-3248S035C GT911: SDA=33, SCL=32, RST=25.
+    // GT911 pins are selected for 035C or 1732S019C above.
     // IRQ can be connected to GND on this board: DO NOT depend on interrupts.
     // Pulse RESET before probing; some GT911 revisions do not respond
     // following a microcontroller-only reset without a reset pulse.
@@ -115,7 +172,7 @@ void DashboardDisplay::initializeTouch()
     }
     if (!bTouchReady)
     {
-        Serial.println("[TOUCH] GT911 NOT DETECTED on SDA=33 SCL=32 (0x5D / 0x14)");
+        Serial.printf("[TOUCH] GT911 NOT DETECTED on SDA=%d SCL=%d (0x5D / 0x14)\n", iTouchSda, iTouchScl);
         Serial.println("[TOUCH] I2C scan:");
         for (uint8_t iAddress = 8; iAddress < 120; ++iAddress)
         {
@@ -195,7 +252,12 @@ bool DashboardDisplay::getTouch(uint16_t* pX, uint16_t* pY)
     {
         return false;
     }
-#if DASH_ROTATION == 1
+#if defined(DASH_BOARD_1732S019C)
+    // C variant: 170x320 native. Validate raw-axis orientation on real hardware.
+    const int iX = DASH_ROTATION ? static_cast<int>(iRawY) : static_cast<int>(iRawX);
+    const int iY = DASH_ROTATION ? 169 - static_cast<int>(iRawX) : static_cast<int>(iRawY);
+    if (iX < 0 || iX >= dash::iWidth || iY < 0 || iY >= dash::iHeight) return false;
+#elif DASH_ROTATION == 1
     // Mapping is preliminary until raw GT911 axes are validated.
     const int iX = static_cast<int>(iRawY);
     const int iY = 319 - static_cast<int>(iRawX);
@@ -209,6 +271,7 @@ bool DashboardDisplay::getTouch(uint16_t* pX, uint16_t* pY)
     *pY = static_cast<uint16_t>(iY);
     return true;
 }
+#endif // CYD XPT2046 vs GT911 035C
 
 #else
 

@@ -89,7 +89,7 @@ static void BuildDemoUI(void)
     CreateLabel(pInfo, "Projet JSON / API : A PORTER", 14, 144, 0xFFCF91);
     pStatus = CreateLabel(pInfo, "Tactile GT911 : 0 appui(s)", 14, 207, 0x75F3AD);
 
-    CreateLabel(pScreen, "DashboardESP 0.3.19 - profil P4 experimental - non valide sur materiel", 35, 553, 0xA2D0E8);
+    CreateLabel(pScreen, "DashboardESP 0.3.20 - profil P4 experimental - non valide sur materiel", 35, 553, 0xA2D0E8);
 }
 
 void app_main(void)
