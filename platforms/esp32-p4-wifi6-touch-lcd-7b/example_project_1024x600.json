@@ -1,0 +1,40 @@
+{
+  "schema": "dashboardesp/1",
+  "resolution": {
+    "width": 1024,
+    "height": 600
+  },
+  "pages": [
+    {
+      "id": "home",
+      "background": "#081827",
+      "widgets": [
+        {
+          "id": "title",
+          "type": "label",
+          "x": 24,
+          "y": 24,
+          "w": 330,
+          "h": 95,
+          "text": "DashboardESP P4 (demo)"
+        },
+        {
+          "id": "weather",
+          "type": "weather",
+          "x": 380,
+          "y": 24,
+          "w": 620,
+          "h": 145
+        },
+        {
+          "id": "thermostat",
+          "type": "thermostat",
+          "x": 24,
+          "y": 150,
+          "w": 520,
+          "h": 370
+        }
+      ]
+    }
+  ]
+}

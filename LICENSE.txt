@@ -1,0 +1,59 @@
+DashboardESP-Firmware - Licence d'utilisation personnelle, source consultable
+Version 1.0 - 14 novembre 2026
+
+Copyright (c) 2026 Titulaire des droits du projet DashboardESP-Firmware.
+Tous droits reserves, sauf permissions expressement accordees ci-dessous.
+
+1. USAGE AUTORISE
+Le titulaire accorde a une personne physique une autorisation personnelle,
+non exclusive, gratuite et non transferable de consulter, telecharger,
+compiler et executer le logiciel uniquement pour ses besoins prives,
+non commerciaux, sur ses propres appareils.
+
+2. INTERDICTIONS
+Sans autorisation ecrite prealable du titulaire, sont interdits :
+- tout usage commercial, professionnel, associatif payant, prestation,
+  vente, location, integration a une offre, service ou produit commercial ;
+- la redistribution du logiciel, des executables, des fichiers source,
+  des modifications, adaptations, forks ou versions derivees, y compris
+  la publication dans un autre depot public ou prive accessible a des tiers ;
+- toute sous-licence, tout transfert ou toute mise a disposition a des tiers ;
+- toute suppression des mentions de droit d'auteur ou de cette licence.
+
+3. MODIFICATIONS
+Les modifications a titre personnel ne sont autorisees qu'aux conditions
+suivantes : avant leur utilisation, la personne qui souhaite beneficier de
+cette autorisation doit communiquer au titulaire le texte integral de ses
+modifications ainsi qu'une description permettant de les reproduire, et
+obtenir son accord ecrit pour leur utilisation. Le titulaire peut demander
+un accord de contribution distinct pour integrer ces modifications au projet.
+Aucun droit de publier, redistribuer, ou commercialiser une version modifiee
+n'est donne par cette licence, meme si des modifications sont communiquees.
+La transmission de modifications ne transfere pas automatiquement leur
+propriete intellectuelle : tout transfert/licence de contribution necessite
+un accord separe.
+
+4. CODE TIERS
+Cette licence ne modifie pas les licences des bibliotheques,
+frameworks et composants tiers (Arduino, ESP-IDF, LVGL, TFT_eSPI,
+ESP32_Display_Panel, ESP32_IO_Expander, BSP Waveshare, etc.). Leurs
+licences et obligations respectives demeurent applicables et peuvent
+necessiter notices et fourniture de code source lors de distributions.
+
+5. ABSENCE DE GARANTIE
+Le logiciel est fourni EN L'ETAT, sans garantie de fonctionnement,
+aptitude a un usage particulier ou absence de defauts, dans la limite
+autorisee par la loi applicable.
+
+6. RESERVE DE DROITS
+Tout droit non expressement concede reste reserve au titulaire.
+Des autorisations commerciales ou de redistribution peuvent etre
+accordees separement par ecrit.
+
+IMPORTANT : Ceci est une licence proprietaire a source consultable,
+PAS une licence open source au sens OSI. La publication du code dans
+GitHub rend sa consultation possible et ne garantit pas l'absence de
+copies non autorisees. Les mecanismes techniques et conditions GitHub
+peuvent permettre des operations de fork ; les restrictions contractuelles
+ne les empechent pas techniquement. Faire relire par un juriste avant
+distribution publique definitive.

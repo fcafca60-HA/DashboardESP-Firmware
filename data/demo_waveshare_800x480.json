@@ -1,0 +1,196 @@
+{
+  "schema": "dashboardesp/1",
+  "resolution": {
+    "width": 800,
+    "height": 480
+  },
+  "pages": [
+    {
+      "id": "home",
+      "background": "#101827",
+      "widgets": [
+        {
+          "id": "title",
+          "type": "label",
+          "x": 18,
+          "y": 15,
+          "w": 764,
+          "h": 55,
+          "text": "DashboardESP - Waveshare 7 pouces",
+          "background": "#193555",
+          "color": "#ffffff",
+          "fontSize": 24
+        },
+        {
+          "id": "temp",
+          "type": "value",
+          "x": 18,
+          "y": 90,
+          "w": 240,
+          "h": 140,
+          "text": "21.5",
+          "command_id": 1001,
+          "show_unit": true,
+          "unit": "°C",
+          "background": "#234361",
+          "color": "#ffffff",
+          "fontSize": 32
+        },
+        {
+          "id": "solar",
+          "type": "value",
+          "x": 278,
+          "y": 90,
+          "w": 240,
+          "h": 140,
+          "text": "2450",
+          "command_id": 1002,
+          "show_unit": true,
+          "unit": "W",
+          "background": "#274d33",
+          "color": "#ffffff",
+          "fontSize": 32
+        },
+        {
+          "id": "soc",
+          "type": "value",
+          "x": 538,
+          "y": 90,
+          "w": 244,
+          "h": 140,
+          "text": "82",
+          "command_id": 1003,
+          "show_unit": true,
+          "unit": "%",
+          "background": "#573c23",
+          "color": "#ffffff",
+          "fontSize": 32
+        },
+        {
+          "id": "light",
+          "type": "button",
+          "x": 18,
+          "y": 260,
+          "w": 240,
+          "h": 96,
+          "text": "Lumiere salon : OFF",
+          "command_id": 2001,
+          "background": "#315ca1",
+          "color": "#ffffff",
+          "fontSize": 20
+        },
+        {
+          "id": "nav",
+          "type": "page_link",
+          "x": 278,
+          "y": 260,
+          "w": 240,
+          "h": 96,
+          "text": "Page suivante >",
+          "target_page_id": "controls",
+          "background": "#386ca8",
+          "color": "#ffffff",
+          "fontSize": 20
+        },
+        {
+          "id": "hint",
+          "type": "label",
+          "x": 18,
+          "y": 388,
+          "w": 764,
+          "h": 65,
+          "text": "LCD + GT911 valides | TEST LOCAL : les commandes ne pilotent pas Jeedom",
+          "background": "#1d3045",
+          "color": "#d2e7ff",
+          "fontSize": 16
+        }
+      ]
+    },
+    {
+      "id": "controls",
+      "background": "#101827",
+      "widgets": [
+        {
+          "id": "title2",
+          "type": "label",
+          "x": 18,
+          "y": 15,
+          "w": 764,
+          "h": 55,
+          "text": "DashboardESP - Commandes tactiles",
+          "background": "#193555",
+          "color": "#ffffff",
+          "fontSize": 24
+        },
+        {
+          "id": "unitoff",
+          "type": "value",
+          "x": 35,
+          "y": 120,
+          "w": 240,
+          "h": 120,
+          "text": "21.5",
+          "command_id": 1001,
+          "show_unit": false,
+          "unit": "°C",
+          "background": "#234361",
+          "color": "#ffffff",
+          "fontSize": 28
+        },
+        {
+          "id": "uniton",
+          "type": "value",
+          "x": 300,
+          "y": 120,
+          "w": 240,
+          "h": 120,
+          "text": "21.5",
+          "command_id": 1001,
+          "show_unit": true,
+          "unit": "°C",
+          "background": "#234361",
+          "color": "#ffffff",
+          "fontSize": 28
+        },
+        {
+          "id": "switch",
+          "type": "button",
+          "x": 555,
+          "y": 120,
+          "w": 200,
+          "h": 120,
+          "text": "Appuyer ici",
+          "command_id": 2002,
+          "background": "#315ca1",
+          "color": "#ffffff",
+          "fontSize": 20
+        },
+        {
+          "id": "back",
+          "type": "page_link",
+          "x": 240,
+          "y": 300,
+          "w": 320,
+          "h": 85,
+          "text": "< Retour accueil",
+          "target_page_id": "home",
+          "background": "#386ca8",
+          "color": "#ffffff",
+          "fontSize": 20
+        },
+        {
+          "id": "footer",
+          "type": "label",
+          "x": 20,
+          "y": 410,
+          "w": 760,
+          "h": 40,
+          "text": "Sans unite         /         Avec unite        /        Action tactile",
+          "background": "#1d3045",
+          "color": "#d2e7ff",
+          "fontSize": 16
+        }
+      ]
+    }
+  ]
+}

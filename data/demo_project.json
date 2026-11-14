@@ -1,0 +1,34 @@
+{
+  "schema": "dashboardesp/1",
+  "id": "demo_dashboardesp",
+  "name": "Demo DashboardESP",
+  "resolution": {"width": 480, "height": 320},
+  "grid": {"enabled": true, "snap": true, "step": 8},
+  "pages": [
+    {
+      "id": "home",
+      "name": "Accueil",
+      "background": "#101827",
+      "widgets": [
+        {"id":"title","type":"label","x":12,"y":10,"w":210,"h":35,"text":"Maison connectee","color":"#ffffff","background":"#183358","fontSize":20,"radius":8},
+        {"id":"clock","type":"datetime","x":245,"y":10,"w":225,"h":35,"datetime_mode":"datetime","color":"#ffffff","background":"#183358","fontSize":16,"radius":8},
+        {"id":"temperature","type":"value","x":12,"y":56,"w":140,"h":55,"text":"21.5","command_id":1001,"color":"#ffffff","background":"#26416b","fontSize":20,"radius":8,"dynamicThresholdsEnabled":true,"dynamicThresholdBands":[{"max":18,"textColor":"#60a5fa","backgroundColor":"#173653"},{"max":24,"textColor":"#4ade80","backgroundColor":"#1b4232"},{"max":null,"textColor":"#fb7185","backgroundColor":"#582434"}]},
+        {"id":"weather","type":"weather","x":164,"y":56,"w":306,"h":55,"text":"Meteo","weather_bindings":{"temperature":1002,"condition":1003,"humidity":1004},"color":"#ffffff","background":"#26416b","fontSize":12,"radius":8},
+        {"id":"energy","type":"energy_summary","x":12,"y":122,"w":302,"h":134,"text":"Energie maison","energy_bindings":{"solar":1011,"home":1012,"battery":1013,"grid":1014},"color":"#ffffff","background":"#183358","fontSize":12,"radius":8},
+        {"id":"meter","type":"energy_meter","x":326,"y":122,"w":144,"h":134,"text":"Compteur","energy_mode":"mono","energy_max":5000,"energy_bindings":{"power":1012,"voltage":1021,"current":1022,"energy":1023},"color":"#ffffff","background":"#183358","fontSize":12,"radius":8},
+        {"id":"go2","type":"page_link","x":12,"y":270,"w":140,"h":40,"text":"Page 2","target_page_id":"controls","color":"#ffffff","background":"#316ac4","fontSize":16,"radius":8},
+        {"id":"light","type":"symbol","x":165,"y":270,"w":100,"h":40,"text":"Lumiere","command_id":1031,"symbol_action_id":2001,"symbol_key":"light","symbol_on_key":"light","symbol_on_color":"#4ade80","symbol_off_color":"#94a3b8","symbol_on_above":0,"symbol_hide_off":false,"color":"#ffffff","background":"#183358","fontSize":12,"radius":8}
+      ]
+    },
+    {
+      "id":"controls","name":"Commandes","background":"#101827",
+      "widgets":[
+        {"id":"page_title","type":"label","x":20,"y":20,"w":440,"h":45,"text":"Commandes","color":"#ffffff","background":"#183358","fontSize":20,"radius":8},
+        {"id":"light_action","type":"button","x":80,"y":95,"w":320,"h":72,"text":"Lumiere Salon","command_id":2001,"color":"#ffffff","background":"#316ac4","fontSize":20,"radius":10},
+        {"id":"shape","type":"rectangle","x":80,"y":181,"w":320,"h":25,"text":"","color":"#ffffff","background":"#26416b","fontSize":12,"radius":4},
+        {"id":"back","type":"page_link","x":130,"y":232,"w":220,"h":55,"text":"Retour accueil","target_page_id":"home","color":"#ffffff","background":"#316ac4","fontSize":16,"radius":8}
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "dashboardesp/1",
+  "id": "test_thermostat",
+  "name": "Thermostat",
+  "resolution": {
+    "width": 480,
+    "height": 320
+  },
+  "grid": {
+    "enabled": true,
+    "snap": true,
+    "step": 8
+  },
+  "pages": [
+    {
+      "id": "accueil",
+      "name": "Accueil",
+      "background": "#101827",
+      "widgets": [
+        {
+          "id": "thermo_salon",
+          "type": "thermostat",
+          "text": "Salon",
+          "x": 20,
+          "y": 20,
+          "w": 240,
+          "h": 150,
+          "color": "#ffffff",
+          "background": "#203453",
+          "fontSize": 16,
+          "radius": 8,
+          "thermostat_bindings": {
+            "temperature": 1001,
+            "setpoint": 1002,
+            "mode": 1003,
+            "heating": 1004,
+            "setpoint_action": 2001
+          },
+          "thermostat_min": 15,
+          "thermostat_max": 25,
+          "thermostat_step": 0.5,
+          "thermostat_show_controls": true
+        }
+      ]
+    }
+  ]
+}
