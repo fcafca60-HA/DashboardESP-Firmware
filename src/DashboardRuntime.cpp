@@ -8,10 +8,13 @@
 #endif
 #include <WiFi.h>
 #include <LittleFS.h>
+#include <esp_heap_caps.h>
+#include <cstring>
 #include <HTTPClient.h>
 #include <esp_system.h>
 #include <time.h>
 #include <math.h>
+#include <utility>
 
 namespace
 {
@@ -132,7 +135,9 @@ namespace
     }
 }
 
-DashboardRuntime::DashboardRuntime() : oServer(iApiPort), oPortal(80), oProject(iJsonCapacity)
+// Allocate the project JSON pool from begin(), not in global/static construction.
+// On classic ESP32 a pre-setup 24 KiB allocation can return capacity() == 0.
+DashboardRuntime::DashboardRuntime() : oServer(iApiPort), oPortal(80), oProject(0)
 {
 }
 
@@ -335,6 +340,85 @@ void DashboardRuntime::registerRoutes()
         oFile.close();
     });
 
+    // Multipart upload writes each chunk straight to LittleFS; no JPEG or base64
+    // decoding and no full image held in RAM.
+    oServer.on("/api/background", HTTP_POST, [this]()
+    {
+        if (!authorize()) return;
+        if (!bBackgroundUploadOk)
+        {
+            sendJson(422, "{\"error\":\"background_upload_failed\"}");
+            return;
+        }
+        sendJson(200, "{\"ok\":true}");
+    }, [this]()
+    {
+        HTTPUpload& tUpload = oServer.upload();
+        if (tUpload.status == UPLOAD_FILE_START)
+        {
+            bBackgroundUploadOk = false;
+            iBackgroundUploadBytes = 0;
+            sBackgroundUploadFinal = "";
+            const String sKey = oServer.header("X-Dashboard-Token");
+            String sPage = oServer.arg("page");
+            // Limit filenames to A-Z, a-z, digits, underscore and hyphen.
+            bool bValid = sPage.length() >= 1 && sPage.length() <= 64;
+            for (unsigned int iIndex = 0; iIndex < sPage.length(); iIndex++)
+            {
+                const char c = sPage[iIndex];
+                if (!isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') bValid = false;
+            }
+            if (!bValid || sKey != sAdminToken) return;
+            sBackgroundUploadFinal = "/bg_" + sPage + ".bin";
+            sBackgroundUploadTemp = "/bg_upload.tmp";
+            LittleFS.remove(sBackgroundUploadTemp);
+            oBackgroundUploadFile = LittleFS.open(sBackgroundUploadTemp, "w");
+            bBackgroundUploadOk = static_cast<bool>(oBackgroundUploadFile);
+        }
+        else if (tUpload.status == UPLOAD_FILE_WRITE)
+        {
+            if (!bBackgroundUploadOk) return;
+            if (iBackgroundUploadBytes + tUpload.currentSize > 96 * 1024 ||
+                oBackgroundUploadFile.write(tUpload.buf, tUpload.currentSize) != tUpload.currentSize)
+            {
+                bBackgroundUploadOk = false;
+                return;
+            }
+            iBackgroundUploadBytes += tUpload.currentSize;
+        }
+        else if (tUpload.status == UPLOAD_FILE_END)
+        {
+            if (oBackgroundUploadFile) oBackgroundUploadFile.close();
+            if (!bBackgroundUploadOk || iBackgroundUploadBytes < 10)
+            {
+                LittleFS.remove(sBackgroundUploadTemp);
+                bBackgroundUploadOk = false;
+                return;
+            }
+            File oCheck = LittleFS.open(sBackgroundUploadTemp, "r");
+            uint8_t aHeader[8] = {};
+            const bool bHeader = oCheck && oCheck.read(aHeader, 8) == 8;
+            if (oCheck) oCheck.close();
+            const unsigned int iW = aHeader[4] | (static_cast<unsigned int>(aHeader[5]) << 8);
+            const unsigned int iH = aHeader[6] | (static_cast<unsigned int>(aHeader[7]) << 8);
+            bBackgroundUploadOk = bHeader && memcmp(aHeader, "DGB1", 4) == 0 &&
+                iW > 0 && iH > 0 && iW <= 256 && iH <= 256 &&
+                iBackgroundUploadBytes == 8 + static_cast<size_t>(iW) * iH * 2;
+            if (bBackgroundUploadOk)
+            {
+                LittleFS.remove(sBackgroundUploadFinal);
+                bBackgroundUploadOk = LittleFS.rename(sBackgroundUploadTemp, sBackgroundUploadFinal);
+            }
+            if (!bBackgroundUploadOk) LittleFS.remove(sBackgroundUploadTemp);
+        }
+        else if (tUpload.status == UPLOAD_FILE_ABORTED)
+        {
+            if (oBackgroundUploadFile) oBackgroundUploadFile.close();
+            LittleFS.remove(sBackgroundUploadTemp);
+            bBackgroundUploadOk = false;
+        }
+    });
+
     oServer.on("/api/config", HTTP_POST, [this]()
     {
         if (!authorize())
@@ -480,11 +564,42 @@ void DashboardRuntime::registerRoutes()
 
 void DashboardRuntime::begin()
 {
+    // Initialize the reusable JSON pool after Arduino runtime startup, before
+    // Wi-Fi and web-server allocations. Never allocate it in a global ctor.
+    // Small classic ESP32 screens may not have a contiguous 24 KiB block;
+    // try progressively smaller pools, with explicit diagnostics.
+    if (oProject.capacity() == 0)
+    {
+        // 64 KiB on the S3 with PSRAM, with graceful fallback if fragmented.
+        // The classic ESP32 still starts at 24 KiB.
+#if defined(DASH_BOARD_WAVESHARE_7)
+        const size_t aiCapacities[] = {iJsonCapacity, 49152, 32768, 24576, 20480, 16384};
+#else
+        const size_t aiCapacities[] = {iJsonCapacity, 20480, 16384};
+#endif
+        for (const size_t iCapacity : aiCapacities)
+        {
+            DynamicJsonDocument oCandidate(iCapacity);
+            if (oCandidate.capacity() > 0)
+            {
+                oProject = std::move(oCandidate);
+                break;
+            }
+            Serial.printf("[JSON] Pool allocation failed requested=%u free_heap=%lu\n",
+                          static_cast<unsigned>(iCapacity),
+                          static_cast<unsigned long>(ESP.getFreeHeap()));
+        }
+        Serial.printf("[JSON] Project pool capacity=%u free_heap=%lu\n",
+                      static_cast<unsigned>(oProject.capacity()),
+                      static_cast<unsigned long>(ESP.getFreeHeap()));
+    }
+
     if (!LittleFS.begin(true))
     {
         Serial.println("[FS] LittleFS mounting failed");
     }
 
+    ulLastUserActivity = millis();
     loadPreferences();
     startWifi();
     registerRoutes();
@@ -616,6 +731,12 @@ void DashboardRuntime::processSerialCommand(String sCommand)
 void DashboardRuntime::loop()
 {
     handleSerial();
+    if (bSaverWakeRequested)
+    {
+        bSaverWakeRequested = false;
+        wakeSaver();
+    }
+    updateSaver();
     if (!bInfoVisible && !sPendingPage.isEmpty())
     {
         const String sDestination = sPendingPage;
@@ -632,6 +753,7 @@ void DashboardRuntime::loop()
     }
 
     oServer.handleClient();
+    processDirectActions();
 
     if (bAccessPoint)
     {
@@ -755,6 +877,7 @@ void DashboardRuntime::infoWifiEvent(lv_event_t* pEvent)
 
 void DashboardRuntime::showInfo()
 {
+    if (pSaverOverlay != nullptr) wakeSaver();
     bInfoVisible = true;
     lv_obj_t* pRoot = lv_screen_active();
     lv_obj_clean(pRoot);
@@ -823,6 +946,7 @@ void DashboardRuntime::showInfo()
 
 void DashboardRuntime::showDefault()
 {
+    if (pSaverOverlay != nullptr) wakeSaver();
     lv_obj_clean(lv_screen_active());
     resetWidgets();
     pScreen = lv_screen_active();
@@ -901,6 +1025,7 @@ void DashboardRuntime::setupEvent(lv_event_t* pEvent)
 
 void DashboardRuntime::showSetup()
 {
+    if (pSaverOverlay != nullptr) wakeSaver();
     lv_obj_clean(lv_screen_active());
     resetWidgets();
     lv_obj_t* pRoot = lv_screen_active();
@@ -1146,7 +1271,7 @@ void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
          tEntry.sType == "value" || tEntry.sType == "symbol" ||
          tEntry.sType == "datetime" || tEntry.sType == "energy_summary" ||
          tEntry.sType == "energy_meter" || tEntry.sType == "button" ||
-         tEntry.sType == "page_link");
+         tEntry.sType == "page_link" || tEntry.sType == "choice_selector");
     const uint32_t ulAccent = parseColor(String(tWidget["accent_color"] | ""),
         tEntry.sType == "thermostat" ? 0x2DD4BF :
         (tEntry.sType == "weather" ? 0xFBBF24 : 0x38BDF8));
@@ -1154,6 +1279,20 @@ void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
     if (bPremium)
     {
         lv_obj_set_style_border_color(tEntry.pObject, lv_color_hex(ulAccent), 0);
+        // Vertical tone-on-tone gradient: computed from two colors, no bitmap RAM.
+        if (!tWidget["dynamicThresholdsEnabled"].as<bool>())
+        {
+            // uint32_t is unsigned long on the ESP32-S3 toolchain, whereas
+            // 255U is unsigned int. Explicitly type both operands for std::min.
+            const uint32_t ulTop = (min<uint32_t>(255U, ((ulFill >> 16) & 255U) + 18U) << 16) |
+                (min<uint32_t>(255U, ((ulFill >> 8) & 255U) + 18U) << 8) |
+                min<uint32_t>(255U, (ulFill & 255U) + 18U);
+            lv_obj_set_style_bg_grad_color(tEntry.pObject, lv_color_hex(ulTop), 0);
+            lv_obj_set_style_bg_grad_dir(tEntry.pObject, LV_GRAD_DIR_VER, 0);
+        }
+        lv_obj_set_style_outline_width(tEntry.pObject, 1, 0);
+        lv_obj_set_style_outline_color(tEntry.pObject, lv_color_hex(ulAccent), 0);
+        lv_obj_set_style_outline_opa(tEntry.pObject, LV_OPA_20, 0);
         const String sHalo = tWidget["halo_effect"] | "soft";
         if (sHalo != "off")
         {
@@ -1193,6 +1332,61 @@ void DashboardRuntime::styleWidget(WidgetEntry& tEntry)
     }
 }
 
+void DashboardRuntime::configureActionTransport()
+{
+    JsonObjectConst tTransport = oProject["action_transport"].as<JsonObjectConst>();
+    sJeedomActionUrl = String(tTransport["url"] | "");
+    sJeedomActionKey = String(tTransport["key"] | "");
+    iJeedomDeviceId = tTransport["device_id"] | 0;
+    bDirectActionConfigured = sJeedomActionUrl.startsWith("http://") &&
+        iJeedomDeviceId > 0 && sJeedomActionKey.length() == 64;
+    Serial.printf("[ACTION] transport=%s\n", bDirectActionConfigured ? "direct_http" : "legacy_queue");
+}
+
+// Network I/O runs in the main loop, never inside an LVGL callback.
+void DashboardRuntime::processDirectActions()
+{
+    if (!bDirectActionConfigured || iActionCount == 0 || WiFi.status() != WL_CONNECTED)
+    {
+        return;
+    }
+    const ActionEntry tAction = atActions[0];
+    for (int iIndex = 1; iIndex < iActionCount; ++iIndex)
+    {
+        atActions[iIndex - 1] = atActions[iIndex];
+    }
+    --iActionCount;
+
+    DynamicJsonDocument oRequest(256);
+    oRequest["device_id"] = iJeedomDeviceId;
+    oRequest["command_id"] = tAction.iCommandId;
+    oRequest["request_id"] = String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX) + "-" +
+                             String(++ulActionSequence) + "-" + String(esp_random(), HEX);
+    if (tAction.bHasValue)
+    {
+        oRequest["value"] = tAction.fValue;
+    }
+    if (tAction.bHasChoice)
+    {
+        oRequest["choice"] = tAction.sChoice;
+    }
+    String sJson;
+    serializeJson(oRequest, sJson);
+    HTTPClient oHttp;
+    oHttp.setTimeout(2500);
+    if (!oHttp.begin(sJeedomActionUrl))
+    {
+        Serial.println("[ACTION] HTTP begin failed");
+        return;
+    }
+    oHttp.addHeader("Content-Type", "application/json");
+    oHttp.addHeader("X-Dashboard-Action-Key", sJeedomActionKey);
+    const int iStatus = oHttp.POST(sJson);
+    Serial.printf("[ACTION] direct command=%d HTTP=%d\n", tAction.iCommandId, iStatus);
+    oHttp.end();
+    // No automatic retry: avoid duplicate physical actions after an ambiguous timeout.
+}
+
 void DashboardRuntime::queueAction(int iCommandId, bool bHasValue, float fValue)
 {
     if (iCommandId <= 0)
@@ -1210,6 +1404,42 @@ void DashboardRuntime::queueAction(int iCommandId, bool bHasValue, float fValue)
     tAction.iCommandId = iCommandId;
     tAction.bHasValue = bHasValue;
     tAction.fValue = fValue;
+    tAction.bHasChoice = false;
+    tAction.sChoice = "";
+}
+
+void DashboardRuntime::queueChoiceAction(int iCommandId, const String& sChoice)
+{
+    if (!bDirectActionConfigured || iCommandId <= 0 || iActionCount >= iMaxActions || sChoice.length() > 80)
+    {
+        return;
+    }
+    ActionEntry& tAction = atActions[iActionCount++];
+    tAction.iCommandId = iCommandId;
+    tAction.bHasValue = false;
+    tAction.fValue = 0;
+    tAction.bHasChoice = true;
+    tAction.sChoice = sChoice;
+}
+
+void DashboardRuntime::choiceEvent(lv_event_t* pEvent)
+{
+    WidgetEntry* pEntry = static_cast<WidgetEntry*>(lv_event_get_user_data(pEvent));
+    if (pEntry == nullptr || pEntry->pOwner == nullptr) return;
+    DashboardRuntime* pSelf = pEntry->pOwner;
+    lv_obj_t* pTarget = static_cast<lv_obj_t*>(lv_event_get_target(pEvent));
+    for (int iIndex = 0; iIndex < pEntry->iChoiceCount; iIndex++)
+    {
+        if (pTarget != pEntry->apChoiceButtons[iIndex]) continue;
+        pSelf->ulLastUserActivity = millis();
+        if (String(pEntry->tSource["choice_mode"] | "list") == "commands")
+            pSelf->queueAction(pEntry->aiChoiceActions[iIndex]);
+        else
+            pSelf->queueChoiceAction(pEntry->iActionId, pEntry->asChoiceValues[iIndex]);
+        Serial.printf("[CHOICE] widget=%s index=%d command=%d\n", pEntry->sId.c_str(), iIndex,
+                      String(pEntry->tSource["choice_mode"] | "list") == "commands" ? pEntry->aiChoiceActions[iIndex] : pEntry->iActionId);
+        return;
+    }
 }
 
 void DashboardRuntime::thermostatModeEvent(lv_event_t* pEvent)
@@ -1293,10 +1523,26 @@ void DashboardRuntime::widgetEvent(lv_event_t* pEvent)
     }
 
     DashboardRuntime* pSelf = pEntry->pOwner;
+    pSelf->ulLastUserActivity = millis();
 
     if (pEntry->sType == "page_link" && !pEntry->sTargetPage.isEmpty())
     {
         pSelf->sPendingPage = pEntry->sTargetPage;
+    }
+    else if (pEntry->sType == "symbol" && pEntry->iOnActionId > 0 && pEntry->iOffActionId > 0)
+    {
+        // Separate ON / OFF commands: rely on the last INFO state, not a local toggle.
+        float fCurrent = 0.0f;
+        const String sInfo = pSelf->getValue(pEntry->iInfoId, "");
+        if (!numericValue(sInfo, fCurrent))
+        {
+            Serial.println("[ACTION] Etat INFO inconnu, action ON/OFF refusee");
+            return;
+        }
+        const float fThreshold = pEntry->tSource["symbol_on_above"] | 0.0f;
+        const int iChosen = fCurrent > fThreshold ? pEntry->iOffActionId : pEntry->iOnActionId;
+        pSelf->queueAction(iChosen);
+        Serial.printf("[ACTION] lampe %s command=%d\n", fCurrent > fThreshold ? "OFF" : "ON", iChosen);
     }
     else if (pEntry->iActionId > 0)
     {
@@ -1322,6 +1568,18 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
     tEntry.iActionId = tEntry.sType == "symbol" ? readCommand(tWidget["symbol_action_id"]) :
                        (tEntry.sType == "button" ? tEntry.iInfoId : 0);
 
+    if (tEntry.sType == "symbol")
+    {
+        tEntry.iOnActionId = readCommand(tWidget["symbol_on_action_id"]);
+        tEntry.iOffActionId = readCommand(tWidget["symbol_off_action_id"]);
+    }
+
+    if (tEntry.sType == "choice_selector")
+    {
+        JsonObjectConst tBindings = tWidget["choice_bindings"].as<JsonObjectConst>();
+        tEntry.iInfoId = readCommand(tBindings["state"]);
+        tEntry.iActionId = readCommand(tBindings["action"]);
+    }
     if (tEntry.sType == "thermostat")
     {
         JsonObjectConst tBindings = tWidget["thermostat_bindings"].as<JsonObjectConst>();
@@ -1329,7 +1587,8 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
     }
 
     const bool bButton = tEntry.sType == "button" || tEntry.sType == "page_link" ||
-                         (tEntry.sType == "symbol" && tEntry.iActionId > 0);
+                         (tEntry.sType == "symbol" && (tEntry.iActionId > 0 ||
+                          (tEntry.iOnActionId > 0 && tEntry.iOffActionId > 0)));
     tEntry.pObject = bButton ? lv_button_create(pScreen) : lv_obj_create(pScreen);
     tEntry.pLabel = lv_label_create(tEntry.pObject);
     lv_label_set_long_mode(tEntry.pLabel, LV_LABEL_LONG_CLIP);
@@ -1340,14 +1599,62 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
         lv_obj_add_event_cb(tEntry.pObject, widgetEvent, LV_EVENT_CLICKED, &tEntry);
     }
 
-    if (tEntry.sType == "energy_summary")
+    if (tEntry.sType == "choice_selector")
+    {
+        JsonArrayConst tChoices = tWidget["choice_options"].as<JsonArrayConst>();
+        JsonObjectConst tActions = tWidget["choice_actions"].as<JsonObjectConst>();
+        const int iColumns = constrain(static_cast<int>(tWidget["choice_columns"] | 2), 1, 4);
+        const int iWidth = max(48, static_cast<int>((tWidget["w"] | 260) * fCanvasScale));
+        const int iHeight = max(44, static_cast<int>((tWidget["h"] | 160) * fCanvasScale));
+        const int iTotal = min(static_cast<int>(tChoices.size()), 8);
+        const int iRows = max(1, (iTotal + iColumns - 1) / iColumns);
+        const int iGap = 4;
+        const int iCellWidth = max(18, (iWidth - 8 - (iColumns - 1) * iGap) / iColumns);
+        const int iCellHeight = max(18, (iHeight - 8 - (iRows - 1) * iGap) / iRows);
+        lv_obj_add_flag(tEntry.pLabel, LV_OBJ_FLAG_HIDDEN);
+        for (JsonObjectConst tOption : tChoices)
+        {
+            const int iIndex = tEntry.iChoiceCount;
+            if (iIndex >= 8) break;
+            const String sValue = String(tOption["value"] | "");
+            if (sValue.isEmpty()) continue;
+            tEntry.asChoiceValues[iIndex] = sValue;
+            tEntry.aiChoiceActions[iIndex] = readCommand(tActions[String(iIndex)]);
+            lv_obj_t* pButton = lv_button_create(tEntry.pObject);
+            tEntry.apChoiceButtons[iIndex] = pButton;
+            lv_obj_set_size(pButton,iCellWidth,iCellHeight);
+            lv_obj_set_pos(pButton,3+(iIndex%iColumns)*(iCellWidth+iGap),3+(iIndex/iColumns)*(iCellHeight+iGap));
+            lv_obj_set_style_pad_all(pButton,2,0);
+            lv_obj_set_style_radius(pButton,9,0);
+            lv_obj_set_style_bg_color(pButton,lv_color_hex(0x172332),0);
+            lv_obj_set_style_bg_grad_color(pButton,lv_color_hex(0x090F17),0);
+            lv_obj_set_style_bg_grad_dir(pButton,LV_GRAD_DIR_VER,0);
+            lv_obj_set_style_border_color(pButton,lv_color_hex(0x415064),0);
+            lv_obj_set_style_border_width(pButton,1,0);
+            lv_obj_remove_flag(pButton,LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(pButton,choiceEvent,LV_EVENT_CLICKED,&tEntry);
+            lv_obj_t* pLabel = lv_label_create(pButton);
+            tEntry.apChoiceLabels[iIndex] = pLabel;
+            lv_label_set_text(pLabel,String(tOption["label"] | sValue.c_str()).c_str());
+            lv_obj_set_width(pLabel,iCellWidth-5);
+            lv_obj_set_style_text_align(pLabel,LV_TEXT_ALIGN_CENTER,0);
+            lv_obj_set_style_text_font(pLabel,selectFont(constrain(iCellHeight/4,8,18)),0);
+            lv_obj_center(pLabel);
+            tEntry.iChoiceCount++;
+        }
+    }
+    else if (tEntry.sType == "energy_summary")
     {
         const int iWidth = tWidget["w"] | 240;
         const int iHeight = tWidget["h"] | 132;
         const int iCellWidth = max(30, (iWidth - 12) / 2);
-        const int iCellHeight = max(24, (iHeight - 30) / 2);
-        lv_obj_set_height(tEntry.pLabel, 20);
-        lv_obj_align(tEntry.pLabel, LV_ALIGN_TOP_MID, 0, 2);
+        const int iCellHeight = max(20, (iHeight - 34) / 2);
+        // Title reserved full width and never larger than the header.
+        lv_obj_set_width(tEntry.pLabel, max(30, static_cast<int>(iWidth * fCanvasScale) - 8));
+        lv_obj_set_height(tEntry.pLabel, 21);
+        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(min(16, scaledFont(tWidget, 12))), 0);
+        lv_obj_set_style_text_align(tEntry.pLabel, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(tEntry.pLabel, LV_ALIGN_TOP_MID, 0, 1);
 
         for (int iIndex = 0; iIndex < 4; iIndex++)
         {
@@ -1355,7 +1662,7 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
             lv_obj_set_size(pCell, iCellWidth, iCellHeight);
             lv_obj_set_pos(pCell, 2 + (iIndex % 2) * (iCellWidth + 3),
                            23 + (iIndex / 2) * (iCellHeight + 2));
-            lv_obj_set_style_bg_color(pCell, lv_color_hex(0x2A4364), 0);
+            lv_obj_set_style_bg_color(pCell, lv_color_hex(0x234B77), 0);
             lv_obj_set_style_bg_opa(pCell, LV_OPA_COVER, 0);
             lv_obj_set_style_border_width(pCell, 0, 0);
             lv_obj_set_style_radius(pCell, 8, 0);
@@ -1371,8 +1678,41 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
     }
     else if (tEntry.sType == "symbol")
     {
-        lv_obj_set_height(tEntry.pLabel, 30);
-        lv_obj_align(tEntry.pLabel, LV_ALIGN_CENTER, 0, -10);
+        const int iCardWidth = max(24, static_cast<int>((tWidget["w"] | 120) * fCanvasScale));
+        const int iCardHeight = max(24, static_cast<int>((tWidget["h"] | 120) * fCanvasScale));
+        // The label and bulb must fit BOTH dimensions; 76x76 widgets previously clipped.
+        const int iSymbolDiameter = max(20, min(92, min(iCardWidth - 10, iCardHeight - 22)));
+        lv_obj_set_size(tEntry.pLabel, iSymbolDiameter, iSymbolDiameter);
+        lv_obj_set_style_radius(tEntry.pLabel, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(tEntry.pLabel, 2, 0);
+        lv_obj_set_style_border_color(tEntry.pLabel, lv_color_hex(0x64748B), 0);
+        lv_obj_set_style_bg_opa(tEntry.pLabel, LV_OPA_30, 0);
+        lv_obj_set_style_bg_color(tEntry.pLabel, lv_color_hex(0x0F243A), 0);
+        lv_obj_set_style_text_align(tEntry.pLabel, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(tEntry.pLabel, LV_ALIGN_TOP_MID, 0, 2);
+        if (String(tWidget["symbol_key"] | "") == "light")
+        {
+            // Draw a real bulb with LVGL primitives: no emoji-font dependency.
+            tEntry.pBulbHead = lv_obj_create(tEntry.pLabel);
+            const int iHeadSize = max(10, static_cast<int>(iSymbolDiameter * 0.42f));
+            lv_obj_set_size(tEntry.pBulbHead, iHeadSize, iHeadSize);
+            lv_obj_set_style_radius(tEntry.pBulbHead, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_border_width(tEntry.pBulbHead, 0, 0);
+            lv_obj_set_style_pad_all(tEntry.pBulbHead, 0, 0);
+            lv_obj_set_style_bg_opa(tEntry.pBulbHead, LV_OPA_COVER, 0);
+            lv_obj_align(tEntry.pBulbHead, LV_ALIGN_CENTER, 0, -5);
+            lv_obj_remove_flag(tEntry.pBulbHead, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(tEntry.pBulbHead, LV_OBJ_FLAG_CLICKABLE);
+            tEntry.pBulbStem = lv_obj_create(tEntry.pLabel);
+            lv_obj_set_size(tEntry.pBulbStem, max(7, iHeadSize / 2), max(4, iHeadSize / 5));
+            lv_obj_set_style_radius(tEntry.pBulbStem, 2, 0);
+            lv_obj_set_style_border_width(tEntry.pBulbStem, 0, 0);
+            lv_obj_set_style_pad_all(tEntry.pBulbStem, 0, 0);
+            lv_obj_set_style_bg_opa(tEntry.pBulbStem, LV_OPA_COVER, 0);
+            lv_obj_align(tEntry.pBulbStem, LV_ALIGN_CENTER, 0, iHeadSize / 3 + 3);
+            lv_obj_remove_flag(tEntry.pBulbStem, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(tEntry.pBulbStem, LV_OBJ_FLAG_CLICKABLE);
+        }
         tEntry.pAux = lv_label_create(tEntry.pObject);
         lv_obj_set_width(tEntry.pAux, lv_pct(100));
         lv_obj_set_style_text_color(tEntry.pAux, lv_color_hex(ulForeground), 0);
@@ -1386,24 +1726,24 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
     {
         const int iWidth = max(1, static_cast<int>(roundf((tWidget["w"] | 140) * fCanvasScale)));
         const int iHeight = max(1, static_cast<int>(roundf((tWidget["h"] | 42) * fCanvasScale)));
-        const int iIconWidth = max(25, min(68, iWidth / 4));
+        const int iIconWidth = max(20, min(52, iWidth / 5));
         lv_obj_set_style_pad_all(tEntry.pObject, 0, 0);
         lv_obj_set_pos(tEntry.pLabel, iIconWidth + 5, 3);
         lv_obj_set_size(tEntry.pLabel, max(30, iWidth - iIconWidth - 11), max(20, iHeight / 2));
         lv_obj_set_style_text_align(tEntry.pLabel, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_style_text_color(tEntry.pLabel, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(scaledFont(tWidget, iHeight >= 80 ? 24 : 20)), 0);
+        lv_obj_set_style_text_font(tEntry.pLabel, selectFont(min(scaledFont(tWidget, 24), max(12, iHeight / 3))), 0);
         tEntry.pWeatherIcon = lv_label_create(tEntry.pObject);
-        lv_obj_set_pos(tEntry.pWeatherIcon, 4, max(1, (iHeight - 30) / 2));
+        lv_obj_set_pos(tEntry.pWeatherIcon, 4, max(1, (iHeight - 26) / 2));
         lv_obj_set_width(tEntry.pWeatherIcon, iIconWidth);
         lv_obj_set_style_text_align(tEntry.pWeatherIcon, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_font(tEntry.pWeatherIcon, selectFont(scaledFont(tWidget, 24)), 0);
+        lv_obj_set_style_text_font(tEntry.pWeatherIcon, selectFont(min(24, max(12, iHeight / 3))), 0);
         lv_obj_set_style_text_color(tEntry.pWeatherIcon, lv_color_hex(0xFDE68A), 0);
         tEntry.pWeatherInfo = lv_label_create(tEntry.pObject);
-        lv_obj_set_pos(tEntry.pWeatherInfo, iIconWidth + 5, iHeight / 2);
+        lv_obj_set_pos(tEntry.pWeatherInfo, iIconWidth + 5, iHeight / 2 + 2);
         lv_obj_set_size(tEntry.pWeatherInfo, max(30, iWidth - iIconWidth - 11), max(14, iHeight / 2 - 4));
         lv_obj_set_style_text_align(tEntry.pWeatherInfo, LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_set_style_text_font(tEntry.pWeatherInfo, selectFont(scaledFont(tWidget, iHeight >= 75 ? 16 : 12)), 0);
+        lv_obj_set_style_text_font(tEntry.pWeatherInfo, selectFont(min(scaledFont(tWidget, 14), max(8, iHeight / 5))), 0);
         lv_obj_set_style_text_color(tEntry.pWeatherInfo, lv_color_hex(0xFDE68A), 0);
         lv_label_set_long_mode(tEntry.pWeatherInfo, LV_LABEL_LONG_CLIP);
     }
@@ -1543,6 +1883,83 @@ void DashboardRuntime::renderWidget(JsonObjectConst tWidget)
     lv_obj_update_layout(tEntry.pObject);
 }
 
+void DashboardRuntime::drawPageBackground(JsonObjectConst tPage)
+{
+    const String sFile = String(tPage["background_image"] | "");
+    const String sExpected = "/bg_" + String(tPage["id"] | "") + ".bin";
+    if (sFile != sExpected.substring(1) || !LittleFS.exists(sExpected)) return;
+
+    File oFile = LittleFS.open(sExpected, "r");
+    uint8_t aHeader[8] = {};
+    if (!oFile || oFile.read(aHeader, 8) != 8 || memcmp(aHeader, "DGB1", 4) != 0)
+    {
+        if (oFile) oFile.close();
+        return;
+    }
+    const uint16_t iW = aHeader[4] | (aHeader[5] << 8);
+    const uint16_t iH = aHeader[6] | (aHeader[7] << 8);
+    const size_t iBytes = static_cast<size_t>(iW) * iH * 2;
+    if (iW < 1 || iH < 1 || iBytes > 96 * 1024 || oFile.size() != iBytes + 8)
+    {
+        oFile.close();
+        return;
+    }
+    // Do not jeopardize the 24KiB project JSON pool or LVGL's draw buffers.
+    // Require a large contiguous spare block before attempting malloc.
+    if (ESP.getMaxAllocHeap() < iBytes + 48 * 1024 && !psramFound())
+    {
+        Serial.printf("[BACKGROUND] Skip: need=%u max_heap=%u\n",
+                      static_cast<unsigned>(iBytes), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+        oFile.close();
+        return;
+    }
+#if defined(BOARD_HAS_PSRAM)
+    if (psramFound())
+        pBackgroundPixels = static_cast<uint8_t*>(heap_caps_malloc(iBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+#endif
+    if (!pBackgroundPixels) pBackgroundPixels = static_cast<uint8_t*>(malloc(iBytes));
+    if (!pBackgroundPixels)
+    {
+        Serial.println("[BACKGROUND] No contiguous buffer; solid color fallback");
+        oFile.close();
+        return;
+    }
+    const size_t iRead = oFile.read(pBackgroundPixels, iBytes);
+    oFile.close();
+    if (iRead != iBytes)
+    {
+        free(pBackgroundPixels); pBackgroundPixels = nullptr;
+        return;
+    }
+    memset(&tBackgroundDescriptor, 0, sizeof(tBackgroundDescriptor));
+#if defined(DASH_LVGL8)
+    tBackgroundDescriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
+    tBackgroundDescriptor.header.w = iW;
+    tBackgroundDescriptor.header.h = iH;
+    tBackgroundDescriptor.data_size = iBytes;
+    tBackgroundDescriptor.data = pBackgroundPixels;
+    pBackgroundImage = lv_img_create(pScreen);
+    lv_img_set_src(pBackgroundImage, &tBackgroundDescriptor);
+    lv_img_set_zoom(pBackgroundImage, static_cast<uint16_t>(roundf(256.0f *
+        (oProject["resolution"]["width"].as<float>() * fCanvasScale) / iW)));
+#else
+    tBackgroundDescriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+    tBackgroundDescriptor.header.cf = LV_COLOR_FORMAT_RGB565;
+    tBackgroundDescriptor.header.stride = iW * 2;
+    tBackgroundDescriptor.header.w = iW;
+    tBackgroundDescriptor.header.h = iH;
+    tBackgroundDescriptor.data_size = iBytes;
+    tBackgroundDescriptor.data = pBackgroundPixels;
+    pBackgroundImage = lv_image_create(pScreen);
+    lv_image_set_src(pBackgroundImage, &tBackgroundDescriptor);
+    lv_image_set_scale(pBackgroundImage, static_cast<int32_t>(roundf(256.0f *
+        (oProject["resolution"]["width"].as<float>() * fCanvasScale) / iW)));
+#endif
+    lv_obj_center(pBackgroundImage);
+    lv_obj_remove_flag(pBackgroundImage, LV_OBJ_FLAG_CLICKABLE);
+    Serial.printf("[BACKGROUND] %ux%u RGB565, %u bytes loaded\n", iW, iH, static_cast<unsigned>(iBytes));
+}
+
 void DashboardRuntime::renderPage(const String& sPageId)
 {
     JsonArrayConst tPages = oProject["pages"].as<JsonArrayConst>();
@@ -1576,13 +1993,31 @@ void DashboardRuntime::renderPage(const String& sPageId)
         Serial.printf("[CANVAS] %dx%d -> %dx%d, echelle=%.3f, marge=%d,%d\n",
                       iSourceWidth, iSourceHeight, iPhysicalWidth, iPhysicalHeight,
                       fCanvasScale, iCanvasOffsetX, iCanvasOffsetY);
+        pSaverOverlay = nullptr;
+        pSaverClock = nullptr;
+        bSaverActive = false;
+        bSaverBlack = false;
         lv_obj_clean(lv_screen_active());
+        pBackgroundImage = nullptr;
+        if (pBackgroundPixels != nullptr)
+        {
+            free(pBackgroundPixels);
+            pBackgroundPixels = nullptr;
+        }
         resetWidgets();
         pScreen = lv_screen_active();
         lv_obj_set_style_pad_all(pScreen, 0, 0);
         lv_obj_set_style_bg_color(pScreen, lv_color_hex(parseColor(String(tPage["background"] | "#101827"), ulBackground)), 0);
         lv_obj_set_scrollbar_mode(pScreen, LV_SCROLLBAR_MODE_OFF);
+        const JsonVariantConst tSaver = oProject["screensaver"];
+        iSaverClockMinute = constrain(static_cast<int>(tSaver["clock_after_min"] | 5), 0, 240);
+        iSaverBlackAdditionalMinute = constrain(static_cast<int>(tSaver["black_after_min"] | 15), 0, 240);
+        iSaverMoveSeconds = constrain(static_cast<int>(tSaver["move_seconds"] | 10), 5, 120);
+        lv_obj_add_flag(pScreen, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(pScreen, saverTouchEvent, LV_EVENT_PRESSED, this);
+        drawPageBackground(tPage);
         sCurrentPage = sPageId;
+        ulLastUserActivity = millis();
         JsonArrayConst tWidgets = tPage["widgets"].as<JsonArrayConst>();
 
         for (JsonObjectConst tWidget : tWidgets)
@@ -1668,6 +2103,52 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
         {
             sText = "--/--/---- --:--";
         }
+    }
+    else if (tEntry.sType == "choice_selector")
+    {
+        const String sValue = getValue(tEntry.iInfoId, "");
+        JsonArrayConst tOptions = tWidget["choice_options"].as<JsonArrayConst>();
+        int iIndex = 0;
+        for (JsonObjectConst tChoice : tOptions)
+        {
+            if (iIndex >= tEntry.iChoiceCount) break;
+            lv_obj_t* pButton = tEntry.apChoiceButtons[iIndex];
+            if (pButton == nullptr) {++iIndex;continue;}
+            const String sOptionValue = String(tChoice["value"] | "");
+            const String sOptionLabel = String(tChoice["label"] | "");
+            const bool bSelected = (sValue == sOptionValue || sValue == sOptionLabel);
+            const uint32_t ulColor = parseColor(String(tChoice["color"] | "#38bdf8"),0x38BDF8);
+            if (tEntry.abChoiceActive[iIndex] != bSelected)
+            {
+                tEntry.abChoiceActive[iIndex] = bSelected;
+                lv_anim_del(pButton, nullptr); // The animated halo is tied to this button only.
+                if (bSelected && String(tWidget["halo_effect"] | "soft") == "pulse")
+                {
+                    lv_anim_t tGlow;
+                    lv_anim_init(&tGlow);
+                    lv_anim_set_var(&tGlow,pButton);
+                    lv_anim_set_exec_cb(&tGlow,[](void* pObject,int32_t iWidth) {
+                        lv_obj_set_style_shadow_width(static_cast<lv_obj_t*>(pObject),iWidth,0);
+                    });
+                    lv_anim_set_values(&tGlow,7,15);
+                    lv_anim_set_time(&tGlow,1350);
+                    lv_anim_set_playback_time(&tGlow,1350);
+                    lv_anim_set_repeat_count(&tGlow,LV_ANIM_REPEAT_INFINITE);
+                    lv_anim_start(&tGlow);
+                }
+            }
+            lv_obj_set_style_border_width(pButton,bSelected ? 2 : 1,0);
+            lv_obj_set_style_border_color(pButton,lv_color_hex(bSelected ? ulColor : 0x415064),0);
+            lv_obj_set_style_shadow_color(pButton,lv_color_hex(ulColor),0);
+            if (!bSelected || String(tWidget["halo_effect"] | "soft") != "pulse")
+                lv_obj_set_style_shadow_width(pButton,bSelected ? 12 : 0,0);
+            lv_obj_set_style_shadow_opa(pButton,bSelected ? LV_OPA_60 : LV_OPA_TRANSP,0);
+            lv_obj_set_style_bg_color(pButton,lv_color_hex(bSelected ? 0x23394C : 0x172332),0);
+            if (tEntry.apChoiceLabels[iIndex])
+                lv_obj_set_style_text_color(tEntry.apChoiceLabels[iIndex],lv_color_hex(bSelected ? 0xFFFFFF : 0xCDD7E4),0);
+            ++iIndex;
+        }
+        return;
     }
     else if (tEntry.sType == "value")
     {
@@ -1774,8 +2255,20 @@ void DashboardRuntime::updateWidget(WidgetEntry& tEntry)
             lv_obj_remove_flag(tEntry.pObject, LV_OBJ_FLAG_HIDDEN);
         }
 
+        if (tEntry.pLabel != nullptr)
+        {
+            lv_obj_set_style_border_color(tEntry.pLabel, lv_color_hex(ulText), 0);
+            lv_obj_set_style_shadow_color(tEntry.pLabel, lv_color_hex(ulText), 0);
+            lv_obj_set_style_shadow_width(tEntry.pLabel, bActive ? 16 : 0, 0);
+            lv_obj_set_style_shadow_opa(tEntry.pLabel, bActive ? LV_OPA_50 : LV_OPA_TRANSP, 0);
+        }
+        if (tEntry.pBulbHead != nullptr)
+        {
+            lv_obj_set_style_bg_color(tEntry.pBulbHead, lv_color_hex(ulText), 0);
+            lv_obj_set_style_bg_color(tEntry.pBulbStem, lv_color_hex(ulText), 0);
+        }
         SetText(tEntry.pAux, sText.isEmpty() ? "Symbole" : sText);
-        sText = String(SymbolText(sSymbolKey));
+        sText = tEntry.pBulbHead != nullptr ? "" : String(SymbolText(sSymbolKey));
     }
     else if (tEntry.sType == "energy_summary")
     {
@@ -1864,9 +2357,14 @@ bool DashboardRuntime::validateProject(JsonVariantConst tProject, String& sError
         const String sPageId = tPage["id"] | "";
         JsonArrayConst tWidgets = tPage["widgets"].as<JsonArrayConst>();
 
-        if (sPageId.isEmpty() || tWidgets.isNull() || tWidgets.size() > iMaxWidgetsPerPage)
+        if (sPageId.isEmpty() || tWidgets.isNull())
         {
             sError = "invalid_page_or_widgets";
+            return false;
+        }
+        if (tWidgets.size() > iMaxWidgetsPerPage)
+        {
+            sError = "too_many_widgets_page_" + sPageId + "_max_" + String(iMaxWidgetsPerPage);
             return false;
         }
 
@@ -1881,12 +2379,13 @@ bool DashboardRuntime::validateProject(JsonVariantConst tProject, String& sError
             const bool bSupported = sType == "label" || sType == "value" || sType == "button" ||
                                     sType == "rectangle" || sType == "page_link" || sType == "datetime" ||
                                     sType == "weather" || sType == "energy_summary" ||
-                                    sType == "energy_meter" || sType == "symbol" || sType == "thermostat";
+                                    sType == "energy_meter" || sType == "symbol" || sType == "thermostat" ||
+                                    sType == "choice_selector";
 
             if (!bSupported || sId.isEmpty() || iX < 0 || iY < 0 || iW <= 0 || iH <= 0 ||
                 iX + iW > iWidth || iY + iH > iHeight)
             {
-                sError = "invalid_widget_geometry_or_type";
+                sError = "invalid_widget_" + sPageId + "_" + sId + "_geometry_or_type";
                 return false;
             }
         }
@@ -1926,7 +2425,7 @@ bool DashboardRuntime::loadProject()
     oProject.clear();
     if (oProject.capacity() == 0)
     {
-        sLastError = "json_pool_alloc_failed";
+        sLastError = "json_pool_alloc_failed:capacity=0:heap=" + String(ESP.getFreeHeap());
         return false;
     }
 
@@ -1947,6 +2446,7 @@ bool DashboardRuntime::loadProject()
 
     JsonArrayConst tPages = oProject["pages"].as<JsonArrayConst>();
     sCurrentPage = String(tPages[0]["id"] | "");
+    configureActionTransport();
     bProjectReady = true;
     sLastError = "";
     return true;
@@ -1993,7 +2493,7 @@ bool DashboardRuntime::saveProject(const String& sJson)
     oProject.clear();
     if (oProject.capacity() == 0)
     {
-        return fRestoreProject("json_pool_alloc_failed");
+        return fRestoreProject("json_pool_alloc_failed:capacity=0:heap=" + String(ESP.getFreeHeap()));
     }
     if (sProjectJsonBacking.length() != sJson.length())
     {
@@ -2075,6 +2575,7 @@ bool DashboardRuntime::saveProject(const String& sJson)
     // second time during this HTTP request: that would repeat the RAM spike.
     JsonArrayConst tPages = oProject["pages"].as<JsonArrayConst>();
     sCurrentPage = String(tPages[0]["id"] | "");
+    configureActionTransport();
     bProjectReady = true;
     sLastError = "";
     bInfoVisible = false;
@@ -2110,5 +2611,89 @@ void DashboardRuntime::showTouch(uint16_t iX, uint16_t iY, bool bPressed)
     {
         bTouchHoldTriggered = true;
         bPortalRequested = true;
+    }
+}
+
+
+// V0.3.25: two-step screensaver, clocks move periodically to avoid burn-in.
+// Touch overlay consumes the first press so underlying actions do not fire.
+void DashboardRuntime::saverTouchEvent(lv_event_t* pEvent)
+{
+    DashboardRuntime* pSelf = static_cast<DashboardRuntime*>(lv_event_get_user_data(pEvent));
+    if (pSelf != nullptr)
+    {
+        pSelf->ulLastUserActivity = millis();
+        pSelf->bSaverWakeRequested = true;
+    }
+}
+
+void DashboardRuntime::wakeSaver()
+{
+    ulLastUserActivity = millis();
+    if (pSaverOverlay != nullptr)
+    {
+        lv_obj_delete(pSaverOverlay);
+        pSaverOverlay = nullptr;
+        pSaverClock = nullptr;
+    }
+    bSaverActive = false;
+    bSaverBlack = false;
+}
+
+void DashboardRuntime::updateSaver()
+{
+    if (!bProjectReady || bSetupMode || bInfoVisible || iSaverClockMinute == 0) return;
+    const uint32_t ulNow = millis();
+    const uint32_t ulIdle = ulNow - ulLastUserActivity;
+    if (ulIdle < static_cast<uint32_t>(iSaverClockMinute) * 60000UL) return;
+
+    if (pSaverOverlay == nullptr)
+    {
+        pSaverOverlay = lv_obj_create(lv_screen_active());
+        lv_obj_set_pos(pSaverOverlay, 0, 0);
+        lv_obj_set_size(pSaverOverlay, dash::iWidth, dash::iHeight);
+        lv_obj_set_style_bg_color(pSaverOverlay, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(pSaverOverlay, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(pSaverOverlay, 0, 0);
+        lv_obj_set_style_radius(pSaverOverlay, 0, 0);
+        lv_obj_set_style_pad_all(pSaverOverlay, 0, 0);
+        lv_obj_add_flag(pSaverOverlay, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(pSaverOverlay, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(pSaverOverlay, saverTouchEvent, LV_EVENT_PRESSED, this);
+        pSaverClock = lv_label_create(pSaverOverlay);
+        lv_obj_set_style_text_font(pSaverClock, selectFont(20), 0);
+        lv_obj_set_style_text_color(pSaverClock, lv_color_hex(0xCBD5E1), 0);
+        ulLastClockPosition = 0;
+        bSaverActive = true;
+        Serial.println("[SAVER] Clock mode");
+    }
+    const bool bShouldBlack = iSaverBlackAdditionalMinute > 0 &&
+        ulIdle >= static_cast<uint32_t>(iSaverClockMinute + iSaverBlackAdditionalMinute) * 60000UL;
+    if (bShouldBlack != bSaverBlack)
+    {
+        bSaverBlack = bShouldBlack;
+        if (pSaverClock != nullptr)
+        {
+            if (bSaverBlack) lv_obj_add_flag(pSaverClock, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_remove_flag(pSaverClock, LV_OBJ_FLAG_HIDDEN);
+        }
+        Serial.println(bSaverBlack ? "[SAVER] Black mode" : "[SAVER] Clock mode");
+    }
+    if (!bSaverBlack && pSaverClock != nullptr &&
+        (ulLastClockPosition == 0 || ulNow - ulLastClockPosition >= static_cast<uint32_t>(iSaverMoveSeconds) * 1000UL))
+    {
+        ulLastClockPosition = ulNow;
+        time_t tNow = time(nullptr);
+        struct tm tLocal = {};
+        localtime_r(&tNow, &tLocal);
+        char acText[48] = {};
+        if (tLocal.tm_year > 120) strftime(acText, sizeof(acText), "%d/%m/%Y %H:%M", &tLocal);
+        else strncpy(acText, "--/--/---- --:--", sizeof(acText)-1);
+        lv_label_set_text(pSaverClock, acText);
+        lv_obj_update_layout(pSaverClock);
+        const int iMaxX = max(0, dash::iWidth - static_cast<int>(lv_obj_get_width(pSaverClock)) - 8);
+        const int iMaxY = max(0, dash::iHeight - static_cast<int>(lv_obj_get_height(pSaverClock)) - 8);
+        lv_obj_set_pos(pSaverClock, 4 + (iMaxX > 0 ? random(iMaxX) : 0),
+                                  4 + (iMaxY > 0 ? random(iMaxY) : 0));
     }
 }

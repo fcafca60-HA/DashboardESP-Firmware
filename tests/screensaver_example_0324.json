@@ -1,0 +1,9 @@
+{
+  "schema": "dashboardesp/1",
+  "screensaver": {
+    "clock_after_min": 5,
+    "black_after_min": 15,
+    "move_seconds": 10
+  },
+  "note": "Example excerpt only; actual project includes resolution and pages."
+}

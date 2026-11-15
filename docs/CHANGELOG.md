@@ -1,3 +1,23 @@
+## V0.3.31 — JSON 48 Kio sur Waveshare S3
+- Limite de téléchargement du projet relevée à 48 Kio sur les profils Waveshare S3 (PSRAM).
+- Pool JSON 64 Kio avec fallback si indisponible ; limite des ESP32 classiques conservée à 24 Kio.
+- Aucun changement aux GPIO, pilotes, actions, fonds d’écran.
+
+## V0.3.26 File (2026-11-14)
+- Les ACTION tactile sont postées directement à Jeedom en HTTP sur le LAN.
+- Une clé API dédiée à chaque écran remplace l'utilisation de la clé générale Jeedom.
+- Les anciennes configurations restent compatibles avec le mécanisme d'actions précédent.
+- Configuration et pilotes d'écrans inchangés.
+
+## V0.3.25 File
+- Ampoule LVGL par primitives; ON/OFF selon INFO; compatibilite Toggle; geometry compacte.
+
+## V0.3.24 File - 2026-11-14
+- Maximum 40 widgets par page et erreurs plus explicites.
+- Symboles avec halo selon l etat INFO, bouton Action tactile.
+- Economiseur 2 niveaux configurable via JSON (horloge mobile puis ecran noir).
+- Fichier fond image reporte, aucune allocation image en RAM.
+
 ## V0.3.23
 - Correctif lib_deps XPT2046: GitHub officiel #v1.4.
 - Ajout profil experimental ESP32-1732S019C 170x320 ST7789/GT911.
